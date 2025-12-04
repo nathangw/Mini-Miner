@@ -1,0 +1,53 @@
+*********************** MINI MINER PARTS LIST ***********************
+
+
+Use this Display, Keyboard and Mouse for BIOS setup before Remote Desktop is configured on the miner.   It connects to the miner thru a single USB-C port.   
+
+Portable Monitor with Keyboard, 14.1Inch Lapdock Monitor Built-in 5000mAh Battery, 1080P HDR IPS Portable Display for Laptop, Steam Deck, Nintendo Switch, Windows, Mac  Amazon $177
+
+
+***********************************
+
+
+Miner Cost $713
+
+
+1 - MINISFORUM BD795i SE Motherboard AMD Ryzen 9 7945HX(16C/32T) Gaming Mini PC  Amazon $383 
+https://www.minisforum.com/new/support?lang=en#/support/page/spec/150
+
+1 - Crucial 16GB DDR5 RAM Laptop Memory Kit (2x8GB), 5600MHz (or 5200MHz or 4800MHz), SODIMM 262-Pin - CT2K8G56C46S5 Amazon $90
+    Equivalent memory is fine.   It just needs to be SODIMM 262-Pin, DDR5 and 4800MHz or better.
+
+1 - WD Blue SN5100 500GB NVMe SSD - M.2 2280, PCIe Gen 4.0, Internal SSD - WDS500G5B0E  Amazon $54
+
+1 - Panda Wireless® PAU0A AC600 Dual Band (2.4GHz and 5GHz) Wireless AC USB Adapter   Amazon $28
+
+1 - Thermaltake SMART 600W ATX 12V V2.3/EPS 12V 80 Plus Certified Active PFC Power Supply PS-SPD-0600NPCWUS-W  Amazon $45
+
+1 - Noctua NF-F12 iPPC-2000 IP67 PWM, Heavy Duty Cooling Fan, 4-Pin, 2000 RPM (120mm, Black)  Amazon $35
+
+1 - Compulab fit-statUSB USB LED Light  Amazon $20
+
+1 - Warmstor 3 Pack 2 Pin SW PC Desktop Power Cable On/Off Push Button ATX Computer Switch Cord 50CM  Amazon $2
+
+1 - 210 Pieces Hex Standoff Spacers M4 Carbon Steel Male Female Metric Thread Spacer  Amazon $6
+
+1" x 1/8" Aluminum Bar for frame   Lowes $22
+
+
+
+
+
+
+
+
+
+
+
+Parts tried but not used.
+
+1 - 9560NGW WiFi Card for Intel, Wireless-Network Card 9560AC, AC 9560, M.2 2230  Amazon $15
+
+1 - onelinkmore UFL to SMA M.2 NGFF IPX MHF4 to RP SMA Female (Male pin) (2 inch (5 cm))  Amazon $7
+
+1 - Eightwood Small WiFi Antenna Dual Band 2.4GHz 5GHz RP-SMA Antenna 2pcs  Amazon $7

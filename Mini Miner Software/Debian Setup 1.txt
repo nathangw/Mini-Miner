@@ -1,0 +1,586 @@
+
+
+********************  COMMON COMMANDS  ********************
+
+View xmrig Console:     sudo journalctl -u xmrig -f --output=cat
+
+Show the xmrig log:     sudo journalctl -u xmrig -n 50 --output=cat
+
+Read Temps and Voltages:    sensors
+
+Check Uptime:    systemctl status xmrig
+
+See the command that started XMRIG:   cat /proc/$(pidof xmrig)/cmdline | tr '\0' ' '
+   Then press Ctrl-C
+
+
+
+
+If you are getting a DNS error in XMRIG, check that your internet isn't blocking the mining pool by redirecting your connection.
+
+
+
+
+
+********************  DISABLE SECURE BOOT IN BIOS  ********************
+
+Setup / Security / Secure Boot / Disabled
+
+
+
+
+
+
+
+
+
+
+********************  CREATE A DEBIAN BOOT USB STICK  ********************
+
+Windows Instructions:
+
+Download Debian ISO:   https://www.debian.org/download
+    choose the 64-bit netinst ISO.
+Download Rufus:  https://rufus.ie
+Insert a USB drive (8 GB or larger).
+Open Rufus and set:
+    Device: your USB drive
+    Boot selection: Choose the Debian ISO you downloaded
+    Partition scheme: GPT (for UEFI) or MBR (for legacy BIOS)
+Leave all other options at defaults.
+Click Start, confirm it will erase the USB, and wait for it to finish.
+
+
+
+
+
+
+
+
+
+
+
+
+********************  INSTALL DEBIAN FROM USB  ********************
+
+Boot with USB
+You may have to choose to boot from USB first in BIOS if you already have an operating system installed.
+DO NOT choose Graphical Install.   Choose plain "Install"
+Wireless network type:   WPA/WPA2 PSK
+Hostname:    Miner(number)  no space
+Domain name:    leave blank
+Root password:    YourPassword
+Full name for the new user:   YourFirstName
+Username for your account:    yourfirstname  (lower case)
+Choose a password for the new user:    YourPassword
+Force UEFI installation?   Yes
+Partition method:   Guided - use entire disk
+Partition scheme:   All files in one partition (recommended for new users)
+
+Choose software to install:
+	uncheck Debian desktop environment
+	uncheck GNOME
+	✅ SSH Server
+	✅ Standard System Utilities
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+********************  UPDATE THE MOTHERBOARD BIOS  ********************
+
+Check for the latest bios:   https://www.minisforum.com/pages/product-info
+	Search:   BD795i SE
+
+Check your current bios version:   sudo dmidecode -s bios-version
+
+
+1) Download the 7z bios package and copy the contents to a FAT32  USB flash drive
+2) Get the EFI directory from another bios package and copy that directory to the USB flash drive
+      MinisForum  MS-01  bios has it.    Search MS-01
+3) Connect LapDock to MiniMiner
+4) Plug in the USB, re-boot and press F7 and choose to boot from USB
+5) Command:   FS1:    (include the :)  The number could be a different drive number.
+6) Command:   EfiFlash.nsh
+
+7) Redo all the BIOS settings.  They are wiped.
+
+Helpful Link:   https://www.virtualizationhowto.com/community/home-lab-forum/steps-to-upgrade-minisforum-motherboard-bios-bd795m-bd795i-se/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+********************  GET REMOTE CONSOLE WORKING  ********************
+
+Command:   su -
+Command:   apt update
+Command:   apt install sudo openssh-server -y
+Command:   systemctl enable --now ssh
+Command:   usermod -aG sudo YOUR_USER_NAME       #Put your username in the command
+Command:   reboot
+
+   Get the assigned IP address for this machine from your router.
+
+From Windows Powershell:    ssh nathan@192.168.1.22   (check for the ip address on your router, use your username)
+
+
+
+
+
+From now on, it is much easier to finish the install from a desktop PC where you can cut and paste the rest of the commands.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+********************  SET STATIC IP  ********************
+
+Show all the connected network adapters:   ip link
+
+CHANGE wlx9ce INTERFACE NAME, IP ADDRESS AND YOUR WIFI CREDENTIALS BELOW
+AND COPY AND PASTE INTO nano
+
+
+Command:   sudo nano /etc/network/interfaces
+#########################################################
+GET THE TEXT FROM DEBIAN PERSONAL
+GET THE TEXT FROM DEBIAN PERSONAL
+GET THE TEXT FROM DEBIAN PERSONAL
+#########################################################
+Ctrl-O,  Enter,  Ctrl-X
+
+Command:   sudo apt install -y avahi-daemon
+Command:   sudo systemctl enable avahi-daemon
+Command:   sudo systemctl restart avahi-daemon
+
+Command:   sudo reboot
+
+
+From Windows Powershell:    ssh nathan@192.168.1.33   (check for the ip address on the router)
+
+Check the current IP address:   ip a
+
+Go to the Network Router:
+	Basic / Attached Devices.   Check, click edit and Rename from Panda Wireless to Miner(number).
+
+
+
+If you get security problems, generate a new SSH key:   ssh-keygen -R 192.168.1.37    #use your IP address.
+
+
+
+
+
+
+
+
+
+
+
+********************  VERIFY DNS WORK  ********************
+
+Command:   ping google.com
+
+
+If it doesn't ping
+Command:    sudo chattr +i /etc/resolv.conf
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+********************  UPDATE THE VIDEO DRIVER  ********************
+
+Command:   sudo apt update
+
+#NOT FOR MINISFORM BD795I SE
+NVIDIA GPU Command:   sudo apt install firmware-misc-nonfree   
+#NOT FOR MINISFORM BD795I SE 
+
+#THIS IS FOR MINISFORM BD795I SE
+AMD GPU Command:   sudo apt install firmware-linux firmware-linux-nonfree firmware-amd-graphics
+#THIS IS FOR MINISFORM BD795I SE
+
+Command:   sudo reboot   (you can do later)
+
+
+********************  KEEP DISPLAY ON   ********************
+
+This is for MSI Gaming GeForce GT 710 ONLY.
+This is for MSI Gaming GeForce GT 710 ONLY.
+This is for MSI Gaming GeForce GT 710 ONLY.
+
+Command:   echo 'options nouveau runpm=0' | sudo tee /etc/modprobe.d/nouveau-poweroff.conf
+Command:   sudo update-initramfs -u
+
+Command:   sudo reboot   (you can do later)
+
+
+
+
+
+
+
+
+
+
+
+
+********************  SETUP XMRIG CONFIG DATA   ********************
+
+Then copy everything into the nano editor below except the ##### bars on the top and bottom.
+
+Command:  sudo nano /etc/miner.env
+#########################################################
+GET THE TEXT FROM DEBIAN PERSONAL
+GET THE TEXT FROM DEBIAN PERSONAL
+GET THE TEXT FROM DEBIAN PERSONAL
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+Command:   sudo chmod 644 /etc/miner.env
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+********************  SETUP SMTP EMAIL ACCOUNT  ********************
+
+You can use any SMTP Account you want.   email notifications are free.
+
+Example:  Get Gmail SMTP Password.
+  1) Go to myaccount.google.com/security
+  2) Enable 2-Step Verification under Signing in to Google.
+  3) After it’s enabled, click App passwords.
+  4) Choose Mail → Other (Custom name) → type miner-email → Generate.
+  5) Copy the 16-character password (no spaces).
+  6) Use it in /etc/msmtprc as your Gmail SMTP password.
+
+
+Command:   sudo apt install -y msmtp msmtp-mta mailutils
+
+Command:   sudo nano /etc/msmtprc
+#########################################################
+GET THE TEXT FROM DEBIAN PERSONAL
+GET THE TEXT FROM DEBIAN PERSONAL
+GET THE TEXT FROM DEBIAN PERSONAL
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+Command:   sudo chmod 644 /etc/msmtprc
+
+
+Command:   sudo nano /usr/local/bin/send_email.sh
+#########################################################
+#!/bin/bash
+# =====================================
+# send_email(subject, body)
+# Reusable function to send emails via msmtp
+# =====================================
+
+# --- CONFIGURATION ---
+[ -f /etc/miner.env ] && . /etc/miner.env                     # Load /etc/miner.env if it exists
+: "${EMAIL_TO:?ERROR: EMAIL_TO not set in /etc/miner.env}"    # Require EMAIL_TO or exit with error
+
+HOSTNAME_STR=$(hostname)
+
+send_email() {
+  local subject="$1"
+  local body="$2"
+  local ts
+  ts=$(date '+%Y-%m-%d %H:%M:%S')
+
+  # Sanitize subject
+  subject=$(printf "%s" "$subject" | tr -d '\r\n')
+
+  # Append clean signature
+  body="${body}\n\n---\nAutomated notification from ${HOSTNAME_STR}"
+
+  # Check for internet connectivity (max wait 30 seconds)
+  local attempt=0
+  while ! ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 6 ]; then
+      echo "[$ts] No internet connection after 30 seconds — skipping email: $subject"
+      return 1
+    fi
+    echo "[$ts] No connection yet — retrying in 5 seconds..."
+    sleep 5
+  done
+  printf "[$ts] Sending email..."
+
+  # Send email via msmtp
+  if command -v msmtp >/dev/null 2>&1; then
+    printf "From: %s\nTo: %s\nSubject: %s\n\n%s\n" \
+      "$EMAIL_TO" "$EMAIL_TO" "$subject" "$(printf "%b" "$body")" | msmtp -t
+    echo "Email sent: $subject"
+  else
+    echo "NOTICE: msmtp not found; skipping email: $subject"
+  fi
+}
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+Command:   sudo chmod +x /usr/local/bin/send_email.sh
+
+Test the email:   bash -c "source /usr/local/bin/send_email.sh; send_email 'Test email from $(hostname)' 'This is a test of the reusable send_email() function. If you see this, msmtp is working correctly.'"
+
+
+
+
+
+
+
+
+
+********************  INSTALL XMRIG   ********************
+
+Command:   sudo apt update && sudo apt upgrade -y
+Command:   sudo apt install -y git build-essential cmake automake libtool autoconf
+Command:   sudo apt install -y build-essential cmake git pkg-config libhwloc-dev libuv1-dev libssl-dev
+Command:   sudo apt install -y jq
+
+
+Clone and Build XMRig:
+
+Command:   sudo -i
+Command:   cd /root
+Command:   git clone https://github.com/xmrig/xmrig.git
+Command:   cd xmrig
+Command:   mkdir build && cd build
+Command:   cmake ..
+Command:   make -j$(nproc)
+
+
+Command:   sudo nano /etc/systemd/system/xmrig.service
+#########################################################
+[Unit]
+Description=XMRig Miner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Run as root for MSR access
+User=root
+WorkingDirectory=/root/xmrig/build
+
+# Load env vars (EMAIL_TO, XMRIG_* ports/tokens, XMRIG_CMD, etc.)
+EnvironmentFile=/etc/miner.env
+
+# Run the one-line XMRIG command from /etc/miner.env
+ExecStart=/bin/bash -c 'eval "$XMRIG_CMD"'
+
+# Auto-restart on failure or hang
+Restart=always
+RestartSec=30
+
+# Nice-to-haves
+Nice=10
+LimitNOFILE=65535
+
+# Log to journal (works with your journalctl commands)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+#########################################################
+Ctrl-O Enter Ctrl-X
+
+
+
+Command:   sudo systemctl daemon-reload
+Command:   sudo systemctl enable --now xmrig.service
+
+
+
+
+
+
+
+********************  ALLOCATE HUGE PAGES   ********************
+
+Command:    sudo nano /etc/default/grub
+
+Verify:   GRUB_DEFAULT=0
+	  GRUB_TIMEOUT=5
+          GRUB_DISTRIBUTOR=`( . /etc/os-release && echo ${NAME} )`
+          GRUB_CMDLINE_LINUX_DEFAULT="quiet"
+
+
+Replace line:     GRUB_CMDLINE_LINUX="default_hugepagesz=2M hugepagesz=2M hugepages=1024"
+
+Type:     Ctrl-O   Enter    Ctrl-X
+
+Command:  sudo update-grub
+Command:  sudo reboot   #(you can reboot later)
+
+
+
+
+
+
+
+
+
+
+
+
+
+******************** SHOW XMRIG LOG ON SCREEN AT BOOT ********************
+
+FOR MINERS WITH DISPLAY ONLY
+FOR MINERS WITH DISPLAY ONLY
+FOR MINERS WITH DISPLAY ONLY
+
+Command:   sudo apt update && sudo apt upgrade -y
+Command:   sudo apt install -y xmrig ccze
+
+
+Command:   sudo nano /usr/local/bin/xmrig-display.sh
+#########################################################
+#!/bin/bash
+clear
+echo -e "\e[1;33m=== XMRig Live Log ===\e[0m"
+echo -e "\e[2;37mCtrl-Alt-F2 for login • Ctrl-C for root shell\e[0m"
+sleep 2
+exec journalctl -u xmrig -f -o cat --no-pager | ccze -A
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+Command:   sudo chmod +x /usr/local/bin/xmrig-display.sh
+       
+
+
+Command:   sudo nano /etc/systemd/system/xmrig-display.service
+#########################################################
+[Unit]
+Description=Rainbow XMRig log on console
+After=network.target xmrig.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xmrig-display.sh
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+KillMode=none
+
+[Install]
+WantedBy=multi-user.target
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+
+Command:   sudo systemctl mask getty@tty1
+
+Command:   sudo systemctl daemon-reload
+Command:   sudo systemctl enable xmrig-display.service
+Command:   sudo systemctl set-default multi-user.target
+
+Command:   sudo reboot
+
+
+
+
+
+
+
+
+******************** MAKE THE LOCAL DISPLAY FONT BIGGER ********************
+
+FOR MINERS WITH DISPLAY ONLY
+FOR MINERS WITH DISPLAY ONLY
+FOR MINERS WITH DISPLAY ONLY
+
+Command:   sudo nano /etc/default/console-setup
+
+Change:    FONTFACE="TerminusBold"
+           FONTSIZE="16x32"
+
+Ctrl-O  Enter  Ctrl-X
+
+Command:   sudo setupcon
+Command:   sudo update-initramfs -u
+
+Command:   sudo reboot
+
+
+
+
+
+
+
+

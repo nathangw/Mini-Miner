@@ -1,0 +1,504 @@
+
+
+********************  COMMON COMMANDS  ********************
+
+Clear the watchdog log:   sudo truncate -s 0 /var/log/miner-watchdog.log
+
+View the watchdog log:   sudo tail -n 50 /var/log/miner-watchdog.log
+
+View the watchdog log live:    sudo tail -f /var/log/miner-watchdog.log
+
+Watchdog Status:   sudo systemctl status miner-watchdog   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+********************  TEST LED   ********************
+
+
+Verify LED is connected:    ls -l /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
+    Must how crw, 166 and ttyACM0 as below.
+crw-rw---- 1 root dialout 166, 0 Nov 26 21:20  /dev/ttyACM0
+
+Erase corrupted port config:   sudo rm /dev/ttyACM0
+
+INIT THE LED:   sudo stty -F /dev/ttyACM0 9600 raw -echo -echoe -echok -echoctl -echoke
+
+SET RED:   echo "#FF0000" | sudo tee /dev/ttyACM0 >/dev/null
+
+SET GREEN:   echo "#00FF00" | sudo tee /dev/ttyACM0 >/dev/null
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+********************  SYSTEM STABILITY LOG   ********************
+
+This is required to be installed so the 5 minute startup email can show any system stability issues.
+
+Command:   sudo apt install rasdaemon
+Command:   sudo systemctl enable --now rasdaemon
+
+Check the log:   sudo ras-mc-ctl --errors
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+********************  MINER WATCHDOG   ********************
+
+
+
+Command:   sudo nano /usr/local/bin/miner-watchdog.sh
+#########################################################
+#!/bin/bash
+# miner-watchdog.sh — Monitors miner via miner-status server and enforces auto-reboot rules
+# (c) 2025 Nathan Gwozdecki
+
+set -euo pipefail                              # exit on error, unset var, or failed pipe (safe script mode)
+[ -f /etc/miner.env ] && . /etc/miner.env      # load shared configuration (STATUS_PORT, STATUS_TOKEN, XMRIG vars, etc.)
+
+# ---- single-instance lock ----
+exec {LOCKFD}<>/run/miner-watchdog.lock || exit 0
+flock -n "$LOCKFD" || exit 0
+
+LOG="/var/log/miner-watchdog.log"
+PASSWORD="${STATUS_TOKEN}"    # use shared STATUS_TOKEN from /etc/miner.env for local miner authentication
+
+MINER_HOST="127.0.0.1"
+MINER_PORT="${STATUS_PORT}"   # use STATUS_PORT from /etc/miner.env for the local miner-status TCP listener
+LOOP_INTERVAL=10   #DO NOT SET LESS THAN 6 SECONDS
+
+# --- Thresholds (from /etc/miner.env) ---
+CPU_LOW="${CPU_LOW:-30}"
+CPU_HIGH="${CPU_HIGH:-80}"
+CPU_WARN="${CPU_WARN:-70}"
+HASH_LOW_5M="${HASH_LOW_5M:-8000}"
+HASH_LOW_30M="${HASH_LOW_30M:-10000}"
+
+printf '%s Using thresholds: CPU_LOW=%s CPU_WARN=%s CPU_HIGH=%s HASH_LOW_5M=%s HASH_LOW_30M=%s\n' \
+  "$(date '+%F %T')" "$CPU_LOW" "$CPU_WARN" "$CPU_HIGH" "$HASH_LOW_5M" "$HASH_LOW_30M" >>"$LOG"
+
+COOL_LIMIT_MIN=5
+LOWHASH5_LIMIT_MIN=5
+LOWHASH30_LIMIT_MIN=30
+CPU_HIGH_MIN=5
+
+# --- Convert minutes to seconds ---
+COOL_LIMIT_SEC=$((COOL_LIMIT_MIN*60))
+LOWHASH5_LIMIT_SEC=$((LOWHASH5_LIMIT_MIN*60))
+LOWHASH30_LIMIT_SEC=$((LOWHASH30_LIMIT_MIN*60))
+CPU_HIGH_LIMIT_SEC=$((CPU_HIGH_MIN*60))
+REBOOT_GUARD_SEC=3600   #1 hour
+
+# --- Counters/State ---
+CoolSecs=0
+LowHash5Secs=0
+LowHash30Secs=0
+CPUHighSec=0
+StartupSecs=0          # 5-minute email timer
+StartupEmailSent=false      
+
+# For change detection
+LastHR=0
+LastTC=0
+LastWT=0
+LastCoolSecs=0
+LastLow5Secs=0
+LastLow30Secs=0
+LastCPUHighSec=0
+LastLoggedHour=""
+
+HOSTNAME_STR="$(hostname)"
+EMAIL_LIB="/usr/local/bin/send_email.sh"
+
+# --- Import email function ---
+if [ -r "$EMAIL_LIB" ]; then
+  source "$EMAIL_LIB"
+else
+  send_email() { echo "[WARN] send_email.sh missing — $1: $2" >>"$LOG"; }
+fi
+
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+log() { printf '%s %s\n' "$(ts)" "$*" >>"$LOG"; }
+
+# Return epoch of the most recent "REBOOT triggered" in $LOG, or 0 if none
+last_reboot_epoch() {
+  local ts
+  ts=$(tac "$LOG" 2>/dev/null | grep -m1 'REBOOT triggered:' | awk '{print $1" "$2}' 2>/dev/null || echo "")
+  if [ -n "$ts" ] && date -d "$ts" >/dev/null 2>&1; then
+    date -d "$ts" +%s
+  else
+    echo 0
+  fi
+}
+
+# --- Miner query ---
+get_metrics() {
+  local json
+  json=$(timeout 6 printf '%s\r\n' "$PASSWORD" | nc -w 4 "$MINER_HOST" "$MINER_PORT" 2>>"$LOG" || true)
+
+  if [[ -z "$json" || "$json" == *"error"* ]]; then
+    HR=0; TC=0; WT=0
+    return 1
+  fi
+  HR=$(echo "$json" | jq -r '.hashrate // 0' 2>/dev/null || echo 0)
+  TC=$(echo "$json" | jq -r '.temp // 0'     2>/dev/null || echo 0)
+  WT=$(echo "$json" | jq -r '.watts // 0'    2>/dev/null || echo 0)
+}
+
+# --- Safe reboot ---
+do_reboot() {
+  local reason="$1"
+  log "REBOOT triggered: $reason"
+
+  # Refresh metrics right before emailing/rebooting
+  get_metrics || true
+  HR=${HR%%.*}; TC=${TC%%.*}; WT=${WT%%.*}
+  [ -n "${HR}" ] || HR=0
+  [ -n "${TC}" ] || TC=0
+  [ -n "${WT}" ] || WT=0
+
+  # Capture last 50 lines of XMRig and Watchdog logs from systemd journal
+  local xmrig_tail=""
+  local watchdog_tail=""
+
+  xmrig_tail=$(journalctl -u xmrig -n 50 2>/dev/null)
+  [ -z "$xmrig_tail" ] && xmrig_tail="(No XMRig entries found in journalctl)"
+
+  if [ -f /var/log/miner-watchdog.log ]; then
+    watchdog_tail=$(tail -n 50 /var/log/miner-watchdog.log 2>/dev/null | sed 's/\r$//'; echo)
+  else
+    watchdog_tail="(No miner-watchdog.log found at /var/log/miner-watchdog.log)"
+  fi
+
+  send_email "$HOSTNAME_STR Miner Reboot Triggered" "
+Host: $HOSTNAME_STR
+When: $(ts)
+
+Reason: $reason
+
+Current Readings:
+- Hashrate: ${HR:-N/A} H/s
+- Temp: ${TC:-N/A} C
+- Watts: ${WT:-N/A} W
+
+==============================
+ Last 50 lines of xmrig.log
+==============================
+${xmrig_tail}
+
+
+======================================
+ Last 50 lines of miner-watchdog.log
+======================================
+${watchdog_tail}
+" || log "WARN: send_email failed (non-fatal)"
+
+  set_led 0 0 0 || true  #turn off led
+  sleep 10
+  /sbin/reboot
+}
+
+
+LED_DEV=""
+
+init_led() {
+  local d vid pid
+
+  # search for our fit-statUSB (VID:PID 2047:03df) on ttyACM*
+  for d in /dev/ttyACM*; do
+    [[ -e "$d" ]] || continue
+    [[ $(stat -c '%F' "$d" 2>/dev/null) == "character special file" ]] || continue
+
+    vid=$(udevadm info -q property -n "$d" 2>/dev/null | awk -F= '/ID_VENDOR_ID=/ {print $2}')
+    pid=$(udevadm info -q property -n "$d" 2>/dev/null | awk -F= '/ID_MODEL_ID=/ {print $2}')
+
+    if [[ "$vid" == "2047" && "$pid" == "03df" ]]; then
+      LED_DEV="$d"
+      # configure serial ONCE
+      stty -F "$LED_DEV" 9600 raw -echo -echoe -echok -echoctl -echoke 2>/dev/null || :
+      return 0
+    fi
+  done
+
+  LED_DEV=""
+  return 1
+}
+
+set_led() {
+  local r="$1" g="$2" b="$3"
+  local dev="$LED_DEV"
+
+  # no configured LED device
+  [[ -n "$dev" && -e "$dev" ]] || return 1
+  [[ $(stat -c '%F' "$dev" 2>/dev/null) == "character special file" ]] || return 1
+
+  # validate 0–255
+  local v
+  for v in "$r" "$g" "$b"; do
+    [[ "$v" =~ ^[0-9]+$ ]] && (( v >= 0 && v <= 255 )) || return 1
+  done
+
+  # convert to hex
+  local rh gh bh
+  printf -v rh '%02X' "$r"
+  printf -v gh '%02X' "$g"
+  printf -v bh '%02X' "$b"
+
+  # write safely (no fake node creation)
+  echo -e "#${rh}${gh}${bh}\n" | tee "$dev" >/dev/null 2>&1 || return 1
+
+  return 0
+}
+
+
+# --- Initialize ---
+init_led || log "LED init failed (fit-statUSB not found)"
+
+set_led 0 0 0 || true  #turn off led
+log "Starting miner watchdog..."
+
+# --- Main loop ---
+while true; do
+  get_metrics || true
+
+  HR=${HR%%.*}; TC=${TC%%.*}; WT=${WT%%.*}
+  [ -n "${HR}" ] || HR=0
+  [ -n "${TC}" ] || TC=0
+  [ -n "${WT}" ] || WT=0
+
+  now=$(date +%s)
+
+  last_reboot_ts=$(last_reboot_epoch)
+  if (( last_reboot_ts > 0 && now - last_reboot_ts < REBOOT_GUARD_SEC )); then
+    reboot_defer=1
+  else
+    reboot_defer=0
+  fi
+
+  # ===== Counters =====
+  (( TC < CPU_LOW )) && ((CoolSecs+=LOOP_INTERVAL)) || CoolSecs=0
+  (( TC > CPU_HIGH )) && ((CPUHighSec+=LOOP_INTERVAL)) || CPUHighSec=0
+  (( HR < HASH_LOW_5M )) && ((LowHash5Secs+=LOOP_INTERVAL)) || LowHash5Secs=0
+  (( HR < HASH_LOW_30M )) && ((LowHash30Secs+=LOOP_INTERVAL)) || LowHash30Secs=0
+
+  # ===== Reboot triggers =====
+  if (( reboot_defer == 0 )); then
+    if (( CoolSecs >= COOL_LIMIT_SEC )); then
+      set_led 0 0 0 || true  #turn off led
+      do_reboot "CPU below ${CPU_LOW}C for ${COOL_LIMIT_MIN} min"
+    elif (( CPUHighSec >= CPU_HIGH_LIMIT_SEC )); then
+      set_led 0 0 0 || true  #turn off led
+      do_reboot "CPU above ${CPU_HIGH}C for ${CPU_HIGH_MIN} min"
+    elif (( LowHash5Secs >= LOWHASH5_LIMIT_SEC )); then
+      set_led 0 0 0 || true  #turn off led
+      do_reboot "Hashrate below ${HASH_LOW_5M} H/s for ${LOWHASH5_LIMIT_MIN} min"
+    elif (( LowHash30Secs >= LOWHASH30_LIMIT_SEC )); then
+      set_led 0 0 0 || true  #turn off led
+      do_reboot "Hashrate below ${HASH_LOW_30M} H/s for ${LOWHASH30_LIMIT_MIN} min"
+    fi
+  fi
+
+
+  # ===== Logging (changes or top of hour) =====
+  current_hour=$(date +%H)
+  log_needed=false
+  diff_hr=$(( HR>LastHR ? HR-LastHR : LastHR-HR ))
+  diff_wt=$(( WT>LastWT ? WT-LastWT : LastWT-WT ))
+  diff_tc=$(( TC>LastTC ? TC-LastTC : LastTC-TC ))
+
+  if (( LastHR == 0 || (diff_hr * 100 / (LastHR + 1)) >= 10 )); then log_needed=true; fi
+  if (( LastWT == 0 || (diff_wt * 100 / (LastWT + 1)) >= 10 )); then log_needed=true; fi
+  if (( LastTC == 0 || diff_tc >= 3 )); then log_needed=true; fi
+
+  # Log only if any counter increased by 60+ seconds since last log
+  if (( CoolSecs - LastCoolSecs >= 60 || LowHash5Secs - LastLow5Secs >= 60 || LowHash30Secs - LastLow30Secs >= 60 || CPUHighSec - LastCPUHighSec >= 60 )); then
+    log_needed=true
+  fi
+
+  if [[ "$current_hour" != "$LastLoggedHour" ]]; then
+    log_needed=true; LastLoggedHour="$current_hour"
+  fi
+
+  if $log_needed; then
+    log "HR=$HR Temp=${TC}°C Watts=${WT} | cool=${CoolSecs}s, hot=${CPUHighSec}s, low5=${LowHash5Secs}s, low30=${LowHash30Secs}s"
+    LastHR=$HR; LastTC=$TC; LastWT=$WT
+    LastCoolSecs=$CoolSecs; LastLow5Secs=$LowHash5Secs; LastLow30Secs=$LowHash30Secs; LastCPUHighSec=$CPUHighSec
+  fi
+
+
+
+  # ---- Perfectly synchronized LED pulse to 10 second intervals ----
+  now_sec=$(date +%s)
+  now_ns=$(date +%N 2>/dev/null || echo "000000000")  # fallback if %N unsupported
+  now_frac="${now_ns:0:3}"                            # first 3 digits = milliseconds
+  epoch_ms=$(( now_sec * 1000 + now_frac ))
+
+  # Which 10-second block are we in? (0 or 1)
+  block=$(( (epoch_ms / (LOOP_INTERVAL * 1000)) % 2 ))
+
+  # Brightness for current block
+  if (( block == 0 )); then
+    PULSE_VAL=${LED_BRT:-100}
+  else
+    PULSE_VAL=$(( LED_BRT * 2 ))
+    (( PULSE_VAL > 255 )) && PULSE_VAL=255
+  fi
+
+  # Sleep exactly to next 10-second boundary (with 150 ms guard)
+  remaining_ms=$(( (LOOP_INTERVAL * 1000) - (epoch_ms % (LOOP_INTERVAL * 1000)) ))
+  if (( remaining_ms < 150 )); then
+    remaining_ms=$(( remaining_ms + LOOP_INTERVAL * 1000 ))
+  fi
+  sleep_sec=$(( remaining_ms / 1000 ))
+  sleep_ms=$(( remaining_ms % 1000 ))
+
+  sleep "${sleep_sec}.${sleep_ms}" 2>/dev/null || sleep "$sleep_sec"  # works on any modern sleep
+
+  # ===== LED control (silent, synchronized across miners) =====
+  if (( TC > CPU_HIGH || CoolSecs > 0 || LowHash5Secs > 0 || LowHash30Secs > 0 || CPUHighSec > 0 )); then
+    set_led 0 0 0 || true                      # turn off led (error/trigger states)
+  elif (( TC > CPU_WARN )); then
+    set_led "$PULSE_VAL" 0 0 || true           # red pulsing when warm
+  else
+    set_led 0 "$PULSE_VAL" 0 || true           # green pulsing when healthy
+  fi
+
+  # ===== 5-minute startup email + last 200 XMRig lines =====
+  if ! $StartupEmailSent; then
+    if (( StartupSecs == 0 )); then
+      StartupSecs=$now_sec
+    fi
+    if (( now_sec - StartupSecs >= 300 )); then
+      # SAFE: XMRig log (ignore failures)
+      XMRIG_LOG=$(
+        journalctl -u xmrig --since "10 minutes ago" 2>/dev/null \
+          | grep -A 199 "Started xmrig" 2>/dev/null \
+          | tail -200 2>/dev/null || true
+      )
+
+      # SAFE: last 100 lines of ras-mc-ctl --errors (ignore failures)
+      MCE_LOG_TAIL=$(
+        ras-mc-ctl --errors 2>/dev/null \
+          | tail -n 100 2>/dev/null || true
+      )
+      if [ -z "${MCE_LOG_TAIL:-}" ]; then
+        MCE_LOG_TAIL="(No output from 'ras-mc-ctl --errors' or rasdaemon not active.)"
+      fi
+
+      # SAFE: email failure is non-fatal
+      send_email "$HOSTNAME_STR XMRig Running (5 min)" "\
+Host: $HOSTNAME_STR
+Started: $(ts)
+Hashrate: $HR H/s
+CPU Temp: $TC C
+Power: $WT W
+Uptime: 5 minutes
+Watchdog active.
+
+
+==========================================
+ Last 100 lines of ras-mc-ctl --errors
+==========================================
+$MCE_LOG_TAIL
+
+
+==============================
+ Last 200 lines of xmrig.log
+==============================
+$XMRIG_LOG
+" || log "WARN: 5-min send_email failed (non-fatal)"
+
+      StartupEmailSent=true
+    fi
+  fi
+  # ==================================================
+
+done
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+Command:   sudo chmod +x /usr/local/bin/miner-watchdog.sh
+
+
+Run Manually to Test:    sudo bash -x /usr/local/bin/miner-watchdog.sh
+Stop the Test: Ctrl-C
+
+
+
+
+
+Command:   sudo nano /etc/systemd/system/miner-watchdog.service
+#########################################################
+[Unit]
+Description=Miner Watchdog (auto-reboot monitor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/miner-watchdog.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/miner-watchdog.log
+StandardError=append:/var/log/miner-watchdog.log
+
+[Install]
+WantedBy=multi-user.target
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+Command:   sudo systemctl daemon-reload
+Command:   sudo systemctl enable miner-watchdog.service
+Command:   sudo systemctl start miner-watchdog.service
+
+
+Command:   sudo reboot  (you can reboot later)
+
+
+
+
+
+
+
+
+
+

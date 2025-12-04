@@ -1,0 +1,127 @@
+
+
+
+
+Edit this file on your PC
+
+
+
+
+
+Command:   sudo nano /etc/network/interfaces
+#########################################################
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback
+
+# === PRIMARY: WiFi (Static IP) ===
+auto wlx9cefd5f9322c
+iface wlx9cefd5f9322c inet static
+    address 192.168.1.30
+    netmask 255.255.255.0
+    gateway 192.168.1.1
+    dns-nameservers 1.1.1.1 8.8.8.8
+    wpa-ssid Your_SSID
+    wpa-psk Your_SSID_Password
+    metric 100
+
+# === SECONDARY: Ethernet (DHCP Fallback) ===
+allow-hotplug enp4s0
+iface enp4s0 inet dhcp
+    metric 200
+#########################################################
+Ctrl-O,  Enter,  Ctrl-X
+
+
+
+
+
+
+
+
+
+
+
+Command:  sudo nano /etc/miner.env
+#########################################################
+#Your email where to send reports to
+EMAIL_TO="Your_Email_In_Quotes"
+
+#=== WATCHDOG THRESHOLDS (used by miner-watchdog.sh) ==
+#Low temperature in C to show that the CPU is idle and not mining
+CPU_LOW=30
+
+#Temperature to restart the miner and send an email   (3950=90  7945=80)
+CPU_HIGH=80
+
+#Temperature to change the LED to red   (3950=80  7945=70)
+CPU_WARN=70
+
+#Hash rate to cause a rapid reboot
+HASH_LOW_5M=8000
+
+#Hash rate to reboot after 30 minutes   (3950=12000  7945=10000)
+HASH_LOW_30M=10000
+
+#LED Brightness (0 - 255)
+LED_BRT=50
+#======================================================
+
+#Local port and password to share XMRIG Hash Rate
+XMRIG_HTTP_PORT="8086"
+XMRIG_HTTP_TOKEN="xmrig56GW2218a"
+
+#Local port and password to share Hash, Temperature, and Watts
+STATUS_PORT="8080"
+STATUS_TOKEN="jjasfSGB123"
+
+#Build the full XMRIG command below. Many pools have an example command line for XMRIG.
+
+XMRIG_CMD="/root/xmrig/build/xmrig --url pool.hashvault.pro:443 --user Your_Monero_Address --pass x --donate-level 1 --tls --http-host 127.0.0.1 --http-port ${XMRIG_HTTP_PORT} --http-access-token ${XMRIG_HTTP_TOKEN} --http-no-restricted"
+
+#Keep all the --http options so the watchdog can read performance data.
+#Keep the entire command on one line to avoid windows notepad end of line problems on Linux.
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+
+
+
+
+
+
+
+
+Command:   sudo nano /etc/msmtprc
+#########################################################
+# Global
+defaults
+syslog on
+
+# email account (no TLS on port 1025)
+account        Your_Name_To_Call_This_Email
+host           Your_email_URL
+port           1025
+auth           login
+tls            off
+tls_starttls   off
+from           Your_Return_Email
+user           Your_Username_Or_Email
+password       Your_App_Password
+
+account default : Your_Name_To_Call_This_Email
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+
+
+
+
+
+
+

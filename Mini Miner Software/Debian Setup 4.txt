@@ -1,0 +1,88 @@
+
+
+********************  COMMON COMMANDS  ********************
+
+
+Check for any log rotation errors:   sudo logrotate -d /etc/logrotate.conf
+
+
+
+
+
+
+
+
+
+
+********************  LIMIT ALL LOGS TO 1 MONTH   ********************
+
+
+Command:   sudo nano /etc/logrotate.d/miner-logs-1month
+#########################################################
+# /etc/logrotate.d/miner-logs-1month
+# Keeps ONLY the last 31 days of miner logs
+# Auto-generated for 1-month retention
+
+/var/log/miner-watchdog.log /var/log/xmrig_update.log /var/log/miner-status.log {
+    weekly
+    # 4 weeks = ~1 month
+    rotate 4
+    # delete anything older than 31 days
+    maxage 31
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 root root
+    sharedscripts
+    postrotate
+        systemctl try-restart miner-watchdog.service >/dev/null 2>&1 || true
+        systemctl try-restart miner-status.service >/dev/null 2>&1 || true
+    endscript
+}
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+
+
+
+
+
+Command:   sudo nano /etc/systemd/journald.conf
+
+Replace everything with:
+#########################################################
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+SystemMaxFileSize=20M
+SystemKeepFree=500M
+# exactly 31 days (31 × 86 400)
+MaxRetentionSec=2678400
+RuntimeMaxUse=50M
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+Command:   sudo systemctl restart systemd-journald
+
+Delete old custom logs:   sudo find /var/log -type f \( -name "miner-watchdog.log*" -o -name "xmrig_update.log*" -o -name "miner-status.log*" \) -mtime +31 -delete
+
+Delete old journal entries:   sudo journalctl --vacuum-time=31days --quiet
+
+Force logrotate to run now:   sudo logrotate -f /etc/logrotate.conf
+
+
+Command:   sudo reboot
+
+
+
+
+
+
+
+
+

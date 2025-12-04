@@ -1,0 +1,66 @@
+
+********************  BIOS SETTINGS  ********************
+
+Advanced / CPU Configureation:
+	PSS Support:   Disabled
+	NX Mode:   Disabled
+
+Advanced / Onboard Devices Settings:
+	NVMe RAID mode:   Disabled
+	Re-Size BAR Support:   Disabled
+	Above 4G Decoding:   Disabled
+	PCI SR-IOV:   Disabled
+
+Advanced / Hardware Monitor / CPU FAN:
+	Full Speed(0x7A):  70
+
+Advanced / AMD CBS / FCH Common Options:
+	Ac Power Loss Options:   Always On
+
+
+
+
+
+********************  XMRIG BIOS TUNING  ********************
+
+Advanced / AMD CBS / SMU Common Options:
+	SmartShift Control:   Manual
+	APU Only sPPT Limit:   46500
+	Sustained Power Limit:   46500
+	Fast PPT Limit:   46500
+	Slow PPT Limit:   46500
+
+Advanced / AMD Overclocking / DDR and Infinity Fabric Frequency / DDR Options / DDR Timings Configuration:
+	Active Memory Timings Settings:   Enabled
+	Memory Target Speed:   4000
+
+Advanced / AMD Overclocking / DDR and Infinity Fabric Frequency / Infinity Fabric Frequency and Dividers:
+	Infinity Fabric Frequency and Dividers:   1333 MHz
+	UCLK DIV1 MODE:   UCLK-MEMCLK
+
+Advanced / AMD Overclocking / Precision Boost Overdrive:
+	Precision Boost Overdrive:   Advanced
+	PBO Limits:   Motherboard
+	Precision Boost Overdrive Scalar:   Auto
+	CPU Boost Clock Override:   Enabled (Positive)
+	Max CPU Boost Clock Override(+):   200
+	Platform Thermal Throttle Ctrl:   Auto
+	GFX Curve Optimizer:
+		GFX Curve Optimizer:   GFX Curve Optimizer	
+		GFX Curve Optimizer Sign:   Negative
+		GFX Curve Optimizer Magnitude:   10
+	Curve Optimizer:
+		Curve Optimizer:   All Cores
+		All Core Curve Optimizer Sign:   Negative
+		All Core Curve Optimizer Magnitude:   30   <--- This setting saves the most electricity and is the Silicon Lottery Setting.  If the system hangs, try 25 or 20.
+
+
+
+
+
+This tune is based on this video:   https://www.youtube.com/watch?v=qVjLvNmZG7w
+	
+
+
+
+
