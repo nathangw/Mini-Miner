@@ -72,13 +72,15 @@ Check the log:   sudo ras-mc-ctl --errors
 
 
 
+The miner watchdog is a continuous monitoring script that checks the miner’s hashrate, CPU temperature, and power every few seconds using the local miner-status server, compares those values against thresholds loaded from /etc/miner.env, and tracks how long any abnormal condition persists. If the miner becomes too cold, too hot, or maintains a low hashrate for either short-term or long-term periods—and enough time has passed since the last reboot—it performs a safe automatic reboot after emailing a detailed report containing current metrics and recent log excerpts. It also manages a USB status LED, pulsing green when healthy, red when warm, and turning off during error states or just before reboot. The watchdog ensures only one copy runs, logs all key events, sends a startup status email after five minutes, and ultimately acts as a full health-protection and recovery system to keep the miner running reliably and autonomously.
+
+
 
 
 
 
 
 ********************  MINER WATCHDOG   ********************
-
 
 
 Command:   sudo nano /usr/local/bin/miner-watchdog.sh

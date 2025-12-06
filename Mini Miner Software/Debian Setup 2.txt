@@ -30,6 +30,7 @@ Read Temps and Voltages:    sensors
 
 
 
+miner-status-handler.sh is a secure, fault-tolerant telemetry script that runs each time a client connects to the miner’s status port, verifies the provided password, loads configuration from /etc/miner.env, and then collects real-time hashrate, CPU temperature, and wattage using several layered fallback methods to ensure compatibility across different XMRig versions and hardware. It intelligently probes multiple API endpoints to extract the 10-second hashrate, reads temperature from lm-sensors or system thermal files, determines power either from AMD PPT, generic sensor keys, a configured fallback value, or by calculating VRM current × voltage when necessary. Every step is logged to /var/log/miner-status.log, and regardless of errors, the script always returns a clean, machine-readable JSON object containing the miner’s current performance metrics, making it reliable for dashboards, automation tools, and your auto-update system.
 
 
 
@@ -328,6 +329,20 @@ Powershell test the script on windows:   echo jjasfSGB122$@ | ncat 192.168.1.35 
     Powershell install ncat command:   winget install Nmap
    
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+This XMRig auto-update script is a fully automated maintenance system that checks GitHub for the newest XMRig release, compares it to the miner’s local version, gathers real-time performance metrics, identifies motherboard firmware, and then—if an update is available—stops the miner, pulls the latest tag, rebuilds XMRig from source, validates the build, restarts the service, and measures post-update hashrate, temperature, and wattage. Whether or not XMRig itself updates, the script also performs a complete Debian system upgrade, sends a detailed email report (with performance before/after, firmware info, and the latest 200 log lines), delays emails based on hostname to prevent inbox flooding, and finally reboots the system to apply updates. All actions are logged to /var/log/xmrig_update.log, and the script uses your miner-status TCP server to reliably fetch live metrics, making each miner self-updating, self-monitoring, and fully autonomous.
 
 
 
