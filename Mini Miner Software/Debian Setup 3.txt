@@ -87,6 +87,7 @@ Command:   sudo nano /usr/local/bin/miner-watchdog.sh
 #########################################################
 #!/bin/bash
 # miner-watchdog.sh — Monitors miner via miner-status server and enforces auto-reboot rules
+# Version 1.2
 # (c) 2025 Nathan Gwozdecki
 
 set -euo pipefail                              # exit on error, unset var, or failed pipe (safe script mode)
@@ -367,16 +368,21 @@ while true; do
   now_sec=$(date +%s)
   now_ns=$(date +%N 2>/dev/null || echo "000000000")  # fallback if %N unsupported
   now_frac="${now_ns:0:3}"                            # first 3 digits = milliseconds
-  epoch_ms=$(( now_sec * 1000 + now_frac ))
+  epoch_ms=$(( now_sec * 1000 + 10#$now_frac ))
+
 
   # Which 10-second block are we in? (0 or 1)
   block=$(( (epoch_ms / (LOOP_INTERVAL * 1000)) % 2 ))
 
-  # Brightness for current block
+  # Brightness for current block (LED_BRT may have leading zeros)
+  brt="${LED_BRT:-100}"
+  # if brt isn’t numeric, fall back to 100
+  [[ "$brt" =~ ^[0-9]+$ ]] || brt=100
+
   if (( block == 0 )); then
-    PULSE_VAL=${LED_BRT:-100}
+    PULSE_VAL=$((10#$brt))
   else
-    PULSE_VAL=$(( LED_BRT * 2 ))
+    PULSE_VAL=$((10#$brt * 2))
     (( PULSE_VAL > 255 )) && PULSE_VAL=255
   fi
 
@@ -405,12 +411,30 @@ while true; do
       StartupSecs=$now_sec
     fi
     if (( now_sec - StartupSecs >= 300 )); then
-      # SAFE: XMRig log (ignore failures)
+
+      # SAFE: XMRig log — start at the *last* "Started xmrig" line,
+      # then take the last 200 lines of that block.
       XMRIG_LOG=$(
-        journalctl -u xmrig --since "10 minutes ago" 2>/dev/null \
-          | grep -A 199 "Started xmrig" 2>/dev/null \
+        journalctl -u xmrig -n 1000 --no-pager -o cat 2>/dev/null \
+          | awk '
+              /Started xmrig/ {buf=""}      # reset buffer on each start
+              {buf = buf $0 ORS}            # keep appending lines
+              END {printf "%s", buf}        # print only lines after last start
+            ' 2>/dev/null \
           | tail -200 2>/dev/null || true
       )
+      XMRIG_LOG=$(echo "$XMRIG_LOG" | sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g")
+
+
+      # Fallback if nothing was captured above
+      if [ -z "$XMRIG_LOG" ]; then
+        XMRIG_LOG=$(
+          journalctl -u xmrig -n 200 --no-pager -o cat 2>/dev/null \
+            || echo "(No XMRig log data found)"
+        )
+        XMRIG_LOG=$(echo "$XMRIG_LOG" | sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g")
+      fi
+
 
       # SAFE: last 100 lines of ras-mc-ctl --errors (ignore failures)
       MCE_LOG_TAIL=$(

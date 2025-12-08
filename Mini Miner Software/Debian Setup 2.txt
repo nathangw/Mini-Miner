@@ -354,6 +354,7 @@ This XMRig auto-update script is a fully automated maintenance system that check
 Command:   sudo nano /usr/local/bin/xmrig-auto-update.sh
 #########################################################
 #!/bin/bash
+#Version 1.0
 # XMRig auto-update (root)
 # Logs: /var/log/xmrig_update.log
 # Uses: /usr/local/bin/send_email.sh (provides send_email(subject, body))
