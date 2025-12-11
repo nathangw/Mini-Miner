@@ -87,10 +87,9 @@ Command:   sudo nano /usr/local/bin/miner-watchdog.sh
 #########################################################
 #!/bin/bash
 # miner-watchdog.sh — Monitors miner via miner-status server and enforces auto-reboot rules
-# Version 1.2
+# Version 1.6
 # (c) 2025 Nathan Gwozdecki
-
-set -euo pipefail                              # exit on error, unset var, or failed pipe (safe script mode)
+set -Eeuo pipefail      		       # note the extra -E so ERR fires in functions/$(...)
 [ -f /etc/miner.env ] && . /etc/miner.env      # load shared configuration (STATUS_PORT, STATUS_TOKEN, XMRIG vars, etc.)
 
 # ---- single-instance lock ----
@@ -156,6 +155,29 @@ fi
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '%s %s\n' "$(ts)" "$*" >>"$LOG"; }
+
+# Capture all stderr from the script into the log
+exec 2>>"$LOG"
+
+exit_trap() {
+  local st=$?
+  local hr=${HR:-N/A}
+  local tc=${TC:-N/A}
+  local wt=${WT:-N/A}
+  log "WATCHDOG EXITED: status=$st (signal or error), last HR=$hr Temp=$tc Watts=$wt \
+cool=${CoolSecs:-0}s hot=${CPUHighSec:-0}s low5=${LowHash5Secs:-0}s low30=${LowHash30Secs:-0}s"
+}
+
+err_trap() {
+  local st=$?
+  local line=${BASH_LINENO[0]:-0}
+  local cmd=${BASH_COMMAND:-unknown}
+  log "WATCHDOG ERROR: status=$st at line $line: $cmd (pid=$$, ppid=$PPID)"
+  exit "$st"    # re-exit with the same status so EXIT trap sees the error
+}
+
+trap exit_trap EXIT
+trap err_trap ERR
 
 # Return epoch of the most recent "REBOOT triggered" in $LOG, or 0 if none
 last_reboot_epoch() {
@@ -435,7 +457,6 @@ while true; do
         XMRIG_LOG=$(echo "$XMRIG_LOG" | sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g")
       fi
 
-
       # SAFE: last 100 lines of ras-mc-ctl --errors (ignore failures)
       MCE_LOG_TAIL=$(
         ras-mc-ctl --errors 2>/dev/null \
@@ -444,6 +465,11 @@ while true; do
       if [ -z "${MCE_LOG_TAIL:-}" ]; then
         MCE_LOG_TAIL="(No output from 'ras-mc-ctl --errors' or rasdaemon not active.)"
       fi
+
+      WATCHDOG_TAIL=$(
+        tail -n 100 "$LOG" 2>/dev/null \
+          || echo "(No miner-watchdog.log data found at $LOG)"
+      )
 
       # SAFE: email failure is non-fatal
       send_email "$HOSTNAME_STR XMRig Running (5 min)" "\
@@ -460,6 +486,12 @@ Watchdog active.
  Last 100 lines of ras-mc-ctl --errors
 ==========================================
 $MCE_LOG_TAIL
+
+
+======================================
+ Last 100 lines of miner-watchdog.log
+======================================
+$WATCHDOG_TAIL
 
 
 ==============================
