@@ -1,5 +1,7 @@
 # MiniMiner Project — Compact 16-Core Crypto CPU Miner
 
+Full Build Playlist:   https://youtube.com/playlist?list=PLz4TjqIRHbyDjz2bluU7x6abvywT1p9yq&si=cQBJ917Fk-47ptS9
+
 Welcome to the **MiniMiner Project**, an open hardware + software platform for building a compact, efficient, fully-autonomous 16-core CPU cryptocurrency miner.  
 This repository contains everything you need to build the physical frame, assemble the system, and install the complete MiniMiner software stack, including auto-updates, watchdog recovery, real-time telemetry, and hands-free operation.
 
