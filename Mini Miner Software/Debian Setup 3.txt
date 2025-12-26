@@ -87,7 +87,8 @@ Command:   sudo nano /usr/local/bin/miner-watchdog.sh
 #########################################################
 #!/bin/bash
 # miner-watchdog.sh — Monitors miner via miner-status server and enforces auto-reboot rules
-# Version 1.6
+# Version 1.7
+# 1.7 - added diagnostic network info to all emails.
 # (c) 2025 Nathan Gwozdecki
 set -Eeuo pipefail      		       # note the extra -E so ERR fires in functions/$(...)
 [ -f /etc/miner.env ] && . /etc/miner.env      # load shared configuration (STATUS_PORT, STATUS_TOKEN, XMRIG vars, etc.)
@@ -156,6 +157,225 @@ fi
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '%s %s\n' "$(ts)" "$*" >>"$LOG"; }
 
+
+
+
+
+
+
+
+
+# --- Reboot email diagnostics (network/session snapshots) ---
+
+diag_block() {
+  local label="$1"; shift
+  printf '\n\n========== %s ==========\n\n' "$label"   # two newlines: one after header, one blank line
+
+  local output
+  output=$("$@" 2>&1 || true)
+  if [ -n "$output" ]; then
+    echo "$output" | sed 's/^/   /'   # echo preserves newlines perfectly
+    printf '\n'                      # blank line after content
+  else
+    printf '   (no output)\n\n'
+  fi
+
+  printf '\n'   # ← This guarantees a blank line after every diag_block
+}
+
+
+# Simple, busybox-friendly traceroute formatter (updated)
+format_traceroute() {
+  local title="$1"
+  local raw_output="$2"
+  local has_hops=0
+
+  printf '\n\n========== %s ==========\n\n' "$title"
+
+  # Print the header, indented
+  echo "$raw_output" | head -n1 | sed 's/^/ /'
+
+  # Process hop lines using process substitution to avoid subshell
+  while IFS= read -r line; do
+    # Trim whitespace
+    line=$(printf '%s' "$line" | sed 's/^[ \t]*//; s/[ \t]*$//')
+    
+    # Skip empty lines and full "* * *" lines
+    [[ -z "$line" ]] && continue
+    [[ "$line" == "* * *" ]] && continue
+    
+    # Only process lines that start with a number (hop lines)
+    if [[ "$line" =~ ^[0-9] ]]; then
+      printf ' %s hop: %s\n' "$((++has_hops))" "$line"
+    fi
+  done < <(echo "$raw_output" | tail -n+2)
+
+  if [ "$has_hops" -eq 0 ]; then
+    printf '  (No intermediate routers responded to probes – this is very common on the internet and usually means nothing is wrong)\n'
+  fi
+}
+
+collect_reboot_diags() {
+  local out=""
+  local router_ip="${DIAG_ROUTER_IP:-192.168.1.1}"
+  local wan_ip="${DIAG_WAN_IP:-1.1.1.1}"
+  local wan_name="Cloudflare DNS (1.1.1.1)"
+
+  out+="When: $(ts)"$'\n'
+  out+="Device: $HOSTNAME_STR"$'\n'
+  out+=$'\n'
+  out+="IMPORTANT NOTES:"$'\n'
+  out+=" • This report shows the network state exactly when the email was sent – it's a snapshot, not a full history."$'\n'
+  out+=" • The ping tests only check if we can reach your router and one public internet address. They do NOT test the mining pools directly."$'\n'
+  out+=" • DNS checks below only show if pool names can be turned into IP addresses – no actual mining traffic is sent."$'\n'
+  out+=" • Active connection lists only show connections that are open right now. Empty lists are completely normal if the miner is idle or using a different pool."$'\n'
+  out+=$'\n'
+
+  out+="--- QUICK NETWORK SUMMARY (at the moment this report was created) ---\n\n"
+
+  local def_route def_if src_ip
+  def_route="$(ip route show default 2>/dev/null | head -n1 || true)"
+  def_if="$(awk '/default/ {for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$def_route" 2>/dev/null || true)"
+  src_ip="$(ip -4 -br addr show "${def_if:-}" 2>/dev/null | awk '{print $3}' | cut -d/ -f1 | head -n1 || true)"
+
+  local ping_router_ok="FAIL" ping_wan_ok="FAIL"
+  ping -c 1 -W 1 "$router_ip" >/dev/null 2>&1 && ping_router_ok="OK"
+  ping -c 1 -W 1 "$wan_ip" >/dev/null 2>&1 && ping_wan_ok="OK"
+
+  out+="How internet traffic leaves this device : ${def_route:-'(no internet route found)'}"$'\n'
+  out+="Main network interface                 : ${def_if:-'(unknown)'}"$'\n'
+  out+="Device's own IP address                : ${src_ip:-'(none detected)'}"$'\n'
+  out+="Can reach router (local network)       : ${ping_router_ok} (${router_ip})"$'\n'
+  out+="Can reach internet                     : ${ping_wan_ok} (${wan_name})"$'\n'
+  out+=$'\n'
+
+  out+=$(diag_block "Full routing table – shows exactly how this device sends traffic out"$'\n' \
+    bash -lc 'ip route')
+
+  out+=$'\n'$(diag_block "Network interfaces status – 'UP' means cable connected / Wi-Fi associated" \
+    bash -lc 'ip -br link')
+
+  out+=$'\n'$(diag_block "All IP addresses assigned to this device" \
+    bash -lc 'ip -br addr')
+
+  out+=$'\n'$(diag_block "Reachability test to router – sending 5 pings to your gateway (${router_ip})" \
+    bash -lc "ping -c 5 -W 1 $router_ip")
+
+  out+=$'\n'$(diag_block "Internet reachability test – sending 5 pings to ${wan_name}" \
+    bash -lc "ping -c 5 -W 1 $wan_ip")
+
+  # Traceroute to internet
+  local tr_internet="$(traceroute -n -w 2 -q 2 $wan_ip 2>/dev/null || echo 'traceroute failed or not available')"
+  out+=$'\n'$(format_traceroute "Path to internet (traceroute to Cloudflare DNS) – helps spot slow or blocked hops" "$tr_internet")
+
+  out+=$'\n'
+
+  # Traceroute to each pool
+  local p host tr_pool
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
+
+    # Run traceroute ONCE, capture all output; don't leak to top of email
+    if tr_pool="$(traceroute -n -w 2 -q 2 "$host" 2>&1)"; then
+      :
+    else
+      tr_pool="traceroute failed (host: $host)"
+    fi
+
+    out+="$(format_traceroute "Path to mining pool ($host) – checks route to pool server" "$tr_pool")"
+    out+=$'\n'
+  done
+
+
+  out+=$(diag_block "DNS servers this device is using – wrong ones can prevent pool names from resolving" \
+    bash -lc 'cat /etc/resolv.conf || systemd-resolve --status 2>/dev/null || true')
+
+  out+=$'\n\n\n========== Port reachability to each mining pool (secure mining port – Open = good) ==========\n'
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
+    out+=$'\n'"Pool hostname: $host:$port"
+    timeout 5 bash -c "echo > /dev/tcp/$host/$port" >/dev/null 2>&1 \
+      && out+="   :   Open (connection succeeded)"$'\n' \
+      || out+="   :   Blocked or timeout"$'\n'
+  done
+
+
+  out+=$'\n\n========== ICMP ping reachability to each mining pool (5 packets) – checks basic IP-level reachability ==========\n\n'
+  out+="Note: Many mining pools block or ignore pings – FAIL here is often normal and does NOT mean mining won't work.\n"
+  firstline=true
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
+    out+="\n\nPool hostname: $host:$port"
+    out+=$'\n'
+    if "$firstline"; then
+      firstline=false
+      out+=$'\n'
+    fi
+    # getent may fail; don't let that kill the loop
+    local ip="$(getent ahosts "$host" 2>/dev/null | awk '/^[0-9.]/{print $1; exit}' || true)"
+    if [ -n "$ip" ]; then
+      local ping_result="$(ping -c 5 -W 1 "$ip" 2>&1 || true)"
+      out+="$ping_result"$'\n'
+      if grep -q "100% packet loss" <<<"$ping_result"; then
+        out+="Result: FAIL (100% loss)"$'\n'
+      else
+        local loss="$(grep "packet loss" <<<"$ping_result" | awk '{print $(NF-4)}' | tr -d '%')"
+        local avg="$(grep "rtt min/avg/max" <<<"$ping_result" | awk -F'/' '{print $5}')"
+        out+="Result: OK (${loss}% loss, avg RTT ${avg:-unknown} ms)"$'\n'
+      fi
+    else
+      out+="Could not resolve to IPv4 address – skipping ping."$'\n'
+    fi
+  done
+
+
+  out+=$(diag_block "Currently active secure (TLS) connections to port 443 – mining pools usually use this" \
+    bash -lc "ss -tnip '( dport = :443 )' | tail -n +2 | sed 's/^/ /'" || true)
+
+  if [ -n "${DIAG_POOLS:-}" ]; then
+    out+=$'\n\n'
+    out+=$'\n========== Raw ss output for each mining pool (advanced detail) =========\n\n'
+    for p in $DIAG_POOLS; do
+      host="${p%%:*}"
+      port="${p##*:}"
+      out+="Pool hostname: $host:$port\n"
+      local ip="$(getent ahosts "$host" 2>&1 | awk 'NR==1{print $1}' || true)"
+      if [ -n "$ip" ]; then
+        out+="Resolved IP: $ip\n\n"
+        local conn="$(ss -tnpi "dst $ip:$port" 2>&1 || true)"
+        if [[ -n "$conn" && "$conn" != *"No such file"* ]]; then
+          out+="$conn\n\n"                  # ss output with its own header + blank line after
+        else
+          out+="No active connections right now.\n\n"
+        fi
+      else
+        out+="Could not resolve hostname.\n\n"
+      fi
+    done
+  fi
+
+
+  out+=$(diag_block "MTU test to internet – fragmentation issues can cause mining dropouts" \
+    bash -lc "ping -c 1 -M do -s 1472 $wan_ip || true")
+
+  out+=$'\n'$(diag_block "System clock and time synchronization – clock jumps can break TLS connections" \
+    bash -lc 'timedatectl')
+
+  out+=$'\n'$(diag_block "Recent kernel messages (last 40 lines) – for Wi-Fi drops, cable issues, etc." \
+    bash -lc 'dmesg | tail -n 40')
+
+  printf '%s\n' "$out"
+}
+
+
+
+
+
+
+
 # Capture all stderr from the script into the log
 exec 2>>"$LOG"
 
@@ -217,17 +437,22 @@ do_reboot() {
   [ -n "${WT}" ] || WT=0
 
   # Capture last 50 lines of XMRig and Watchdog logs from systemd journal
-  local xmrig_tail=""
-  local watchdog_tail=""
 
+  local xmrig_tail=""
   xmrig_tail=$(journalctl -u xmrig -n 50 2>/dev/null)
   [ -z "$xmrig_tail" ] && xmrig_tail="(No XMRig entries found in journalctl)"
 
+  local watchdog_tail=""
   if [ -f /var/log/miner-watchdog.log ]; then
     watchdog_tail=$(tail -n 50 /var/log/miner-watchdog.log 2>/dev/null | sed 's/\r$//'; echo)
   else
     watchdog_tail="(No miner-watchdog.log found at /var/log/miner-watchdog.log)"
   fi
+
+  local reboot_diags=""
+  reboot_diags="$(collect_reboot_diags 2>&1 || echo "(collect_reboot_diags failed)")"
+
+
 
   send_email "$HOSTNAME_STR Miner Reboot Triggered" "
 Host: $HOSTNAME_STR
@@ -239,6 +464,12 @@ Current Readings:
 - Hashrate: ${HR:-N/A} H/s
 - Temp: ${TC:-N/A} C
 - Watts: ${WT:-N/A} W
+
+==============================
+PRE-REBOOT NETWORK DIAGNOSTICS
+==============================
+${reboot_diags}
+
 
 ==============================
  Last 50 lines of xmrig.log
@@ -432,7 +663,7 @@ while true; do
     if (( StartupSecs == 0 )); then
       StartupSecs=$now_sec
     fi
-    if (( now_sec - StartupSecs >= 300 )); then
+    if (( now_sec - StartupSecs >= 300 )); then  
 
       # SAFE: XMRig log — start at the *last* "Started xmrig" line,
       # then take the last 200 lines of that block.
@@ -471,6 +702,10 @@ while true; do
           || echo "(No miner-watchdog.log data found at $LOG)"
       )
 
+
+      # Network/session diagnostics (snapshot)
+      reboot_diags="$(collect_reboot_diags 2>&1 || echo "(collect_reboot_diags failed)")"
+
       # SAFE: email failure is non-fatal
       send_email "$HOSTNAME_STR XMRig Running (5 min)" "\
 Host: $HOSTNAME_STR
@@ -480,6 +715,12 @@ CPU Temp: $TC C
 Power: $WT W
 Uptime: 5 minutes
 Watchdog active.
+
+
+==============================
+     NETWORK DIAGNOSTICS
+==============================
+${reboot_diags}
 
 
 ==========================================

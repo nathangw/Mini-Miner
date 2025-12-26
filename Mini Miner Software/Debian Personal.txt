@@ -76,9 +76,22 @@ XMRIG_HTTP_TOKEN="xmrig56GW2218a"
 STATUS_PORT="8080"
 STATUS_TOKEN="jjasfSGB123"
 
-#Build the full XMRIG command below. Many pools have an example command line for XMRIG.
+# Pools (space-separated string, not an array)
+DIAG_POOLS="pool.hashvault.pro:443 gulf.moneroocean.stream:443 supportxmr.com:443"
 
-XMRIG_CMD="/root/xmrig/build/xmrig --url pool.hashvault.pro:443 --user Your_Monero_Address --pass x --donate-level 1 --tls --http-host 127.0.0.1 --http-port ${XMRIG_HTTP_PORT} --http-access-token ${XMRIG_HTTP_TOKEN} --http-no-restricted"
+# Wallet
+XMRIG_WALLET="YOUR_MONERO_ADDRESS_IN_QUOTES"
+
+# Final xmrig command (single line — shell will expand variables)
+XMRIG_CMD="/root/xmrig/build/xmrig \
+ --url pool.hashvault.pro:443 --user ${XMRIG_WALLET} --pass x --tls \
+ --url gulf.moneroocean.stream:443 --user ${XMRIG_WALLET} --pass x --tls \
+ --url supportxmr.com:443 --user ${XMRIG_WALLET} --pass x --tls \
+ --donate-level 1 \
+ --http-host 127.0.0.1 \
+ --http-port ${XMRIG_HTTP_PORT} \
+ --http-access-token ${XMRIG_HTTP_TOKEN} \
+ --http-no-restricted"
 
 #Keep all the --http options so the watchdog can read performance data.
 #Keep the entire command on one line to avoid windows notepad end of line problems on Linux.
