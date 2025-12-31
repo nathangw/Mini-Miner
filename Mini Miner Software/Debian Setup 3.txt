@@ -87,8 +87,9 @@ Command:   sudo nano /usr/local/bin/miner-watchdog.sh
 #########################################################
 #!/bin/bash
 # miner-watchdog.sh — Monitors miner via miner-status server and enforces auto-reboot rules
-# Version 1.7
+# Version 1.8
 # 1.7 - added diagnostic network info to all emails.
+# 1.8 - added more network diagnostics to all emails.
 # (c) 2025 Nathan Gwozdecki
 set -Eeuo pipefail      		       # note the extra -E so ERR fires in functions/$(...)
 [ -f /etc/miner.env ] && . /etc/miner.env      # load shared configuration (STATUS_PORT, STATUS_TOKEN, XMRIG vars, etc.)
@@ -300,6 +301,106 @@ collect_reboot_diags() {
       && out+="   :   Open (connection succeeded)"$'\n' \
       || out+="   :   Blocked or timeout"$'\n'
   done
+
+
+
+
+
+  # Extra detail to help distinguish DNS issues, IPv6 issues, and TLS/443 blocking
+  out+=$'\n\n========== Extra connectivity details for each mining pool (DNS + TLS probe) ==========\n'
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
+
+    out+=$'\n'"Pool hostname: $host:$port"$'\n'
+
+    # --- DNS resolution details (both IPv4 and IPv6 if present) ---
+    local ahosts
+    ahosts="$(getent ahosts "$host" 2>/dev/null || true)"
+    if [ -n "$ahosts" ]; then
+      out+="Resolved addresses via getent ahosts:"$'\n'
+      out+="$ahosts"$'\n'
+    else
+      out+="Resolved addresses via getent ahosts: (none – DNS lookup failed)"$'\n'
+    fi
+
+    # --- Simple IPv4-only extraction (helps catch “IPv6 works, IPv4 blocked” cases) ---
+    local ipv4_list
+    ipv4_list="$(printf '%s\n' "$ahosts" | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1}' || true)"
+    if [ -n "$ipv4_list" ]; then
+      out+="IPv4 addresses used for testing:"$'\n'
+      out+="$ipv4_list"$'\n'
+    else
+      out+="IPv4 addresses used for testing: (none – hostname may be IPv6-only)"$'\n'
+    fi
+
+    # --- TLS / HTTPS probe with curl (only if curl is installed) ---
+    if command -v curl >/dev/null 2>&1; then
+      local curl_out
+      # We only keep the first ~12 lines so the email doesn't explode
+      curl_out="$(
+        curl -v --connect-timeout 5 --max-time 5 "https://$host:$port" </dev/null 2>&1 \
+          | sed -n '1,12p' \
+          || true
+      )"
+      if [ -n "$curl_out" ]; then
+        out+="curl -v TLS probe (first lines):"$'\n'"$curl_out"$'\n'
+      else
+        out+="curl -v TLS probe: (no output – likely hard timeout)"$'\n'
+      fi
+    else
+      out+="curl not installed – skipping TLS probe on $host:$port"$'\n'
+    fi
+  done
+
+
+
+  # Extra per-IP port test so we can see which Hashvault backend is failing
+  out+=$'\n\n========== Per-IP port reachability for each mining pool (helps debug Hashvault) ==========\n'
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
+
+    out+=$'\n'"Pool hostname: $host:$port"$'\n'
+
+    # Get unique IPv4 addresses for this host
+    local ahosts ipv4_list ip any_ok
+    ahosts="$(getent ahosts "$host" 2>/dev/null || true)"
+    ipv4_list="$(printf '%s\n' "$ahosts" \
+                  | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1}' \
+                  | sort -u)"
+
+    if [ -z "$ipv4_list" ]; then
+      out+="   (No IPv4 addresses found – DNS failure or IPv6-only host)\n"
+      continue
+    fi
+
+    any_ok=0
+    for ip in $ipv4_list; do
+      if timeout 5 bash -lc "echo > /dev/tcp/$ip/$port" >/dev/null 2>&1; then
+        out+="   [$ip] : Open (TCP handshake succeeded)\n"
+        any_ok=1
+      else
+        out+="   [$ip] : Blocked or timeout\n"
+      fi
+    done
+
+    if (( any_ok == 1 )); then
+      out+="   Overall: at least one backend reachable\n"
+    else
+      out+="   Overall: ALL backends failed – this really looks blocked\n"
+    fi
+  done
+
+
+
+
+
+
+
+
+
+
 
 
   out+=$'\n\n========== ICMP ping reachability to each mining pool (5 packets) – checks basic IP-level reachability ==========\n\n'

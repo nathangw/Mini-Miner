@@ -357,7 +357,7 @@ send_email() {
   # Sanitize subject
   subject=$(printf "%s" "$subject" | tr -d '\r\n')
 
-  # Append clean signature
+  # Append clean signature ONCE
   body="${body}\n\n---\nAutomated notification from ${HOSTNAME_STR}"
 
   # Check for internet connectivity (max wait 30 seconds)
@@ -373,10 +373,37 @@ send_email() {
   done
   printf "[$ts] Sending email..."
 
-  # Send email via msmtp
+  # Send email via msmtp (HTML with readable monospace formatting)
   if command -v msmtp >/dev/null 2>&1; then
-    printf "From: %s\nTo: %s\nSubject: %s\n\n%s\n" \
-      "$EMAIL_TO" "$EMAIL_TO" "$subject" "$(printf "%b" "$body")" | msmtp -t
+
+    # Escape HTML-sensitive characters
+    esc_body="$(printf "%b" "$body" \
+      | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+
+    cat <<EOF | msmtp -t
+To: $EMAIL_TO
+From: $EMAIL_TO
+Subject: $subject
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<html>
+  <body style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #000;">
+    <pre style="
+      font-family: 'Courier New', Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.35;
+      color: #000000;
+      padding: 12px;
+      border-radius: 6px;
+      white-space: pre-wrap;
+    ">
+$esc_body
+    </pre>
+  </body>
+</html>
+EOF
+
     echo "Email sent: $subject"
   else
     echo "NOTICE: msmtp not found; skipping email: $subject"
