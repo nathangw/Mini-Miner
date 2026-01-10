@@ -3,7 +3,11 @@
 
 Use this Display, Keyboard and Mouse for BIOS setup before Remote Desktop is configured on the miner.   It connects to the miner thru a single USB-C port.   
 
-Portable Monitor with Keyboard, 14.1Inch Lapdock Monitor Built-in 5000mAh Battery, 1080P HDR IPS Portable Display for Laptop, Steam Deck, Nintendo Switch, Windows, Mac  Amazon $177
+"Portable Monitor with Keyboard, 14.1Inch Lapdock Monitor Built-in 5000mAh Battery, 1080P HDR IPS Portable Display for Laptop, Steam Deck, Nintendo Switch, Windows, Mac"
+
+Search the entire sentence above on Amazon or just search LapDock.  The actual model doesn't show up in the search for some reason.
+
+Dopesplay Model DR1461    Amazon $177
 
 
 ***********************************
