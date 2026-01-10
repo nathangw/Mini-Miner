@@ -87,11 +87,13 @@ XMRIG_CMD="/root/xmrig/build/xmrig \
  --url pool.hashvault.pro:443 --user ${XMRIG_WALLET} --pass x --tls \
  --url gulf.moneroocean.stream:443 --user ${XMRIG_WALLET} --pass x --tls \
  --url supportxmr.com:443 --user ${XMRIG_WALLET} --pass x --tls \
+ --rig-id $(hostname) \
  --donate-level 1 \
  --http-host 127.0.0.1 \
  --http-port ${XMRIG_HTTP_PORT} \
  --http-access-token ${XMRIG_HTTP_TOKEN} \
- --http-no-restricted"
+ --http-no-restricted \
+ --randomx-1gb-pages"
 
 #Keep all the --http options so the watchdog can read performance data.
 #Keep the entire command on one line to avoid windows notepad end of line problems on Linux.

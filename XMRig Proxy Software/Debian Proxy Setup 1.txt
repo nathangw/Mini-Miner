@@ -2,21 +2,13 @@
 
 ********************  COMMON COMMANDS  ********************
 
-View xmrig Console:     sudo journalctl -u xmrig -f --output=cat
+Proxy Log View:    sudo tail -f /var/log/xmrig-proxy.log
 
-Show the xmrig log:     sudo journalctl -u xmrig -n 50 --output=cat
-
-Read Temps and Voltages:    sensors
-
-Check Uptime:    systemctl status xmrig
-
-See the command that started XMRIG:   cat /proc/$(pidof xmrig)/cmdline | tr '\0' ' '
-   Then press Ctrl-C
+Proxy Log 200:   sudo tail -n 200 /var/log/xmrig-proxy.log
 
 
 
-
-If you are getting a DNS error in XMRIG, check that your internet isn't blocking the mining pool by redirecting your connection.
+Access Log View:    sudo tail -f /var/log/xmrig-proxy-access.log
 
 
 
@@ -24,8 +16,14 @@ If you are getting a DNS error in XMRIG, check that your internet isn't blocking
 
 ********************  DISABLE SECURE BOOT IN BIOS  ********************
 
-Setup / Security / Secure Boot / Disabled
 
+
+1) Reboot the KAMRUI Pinova P2.
+2) As soon as it starts booting, repeatedly press **DEL** (or **F2** on some units) to enter the BIOS/UEFI setup.
+3) In BIOS, go to the **Boot** or **Security** tab (depends on BIOS version).
+4) Find **Secure Boot** and set it to **Disabled**.
+5) If there is an option called **OS Type**, set it to **Other OS** (if available).
+6) Press **F10** to Save & Exit, then confirm.
 
 
 
@@ -99,23 +97,37 @@ Choose software to install:
 
 ********************  UPDATE THE MOTHERBOARD BIOS  ********************
 
-Check for the latest bios:   https://www.minisforum.com/pages/product-info
-	Search:   BD795i SE
 
-Check your current bios version:   sudo dmidecode -s bios-version
+1) Go to the KAMRUI support page for the Pinova P2:
+   https://kamrui.com/pages/support
+   (Search for: Pinova P2)
 
+2) Download the latest BIOS update package for the Pinova P2.
 
-1) Download the 7z bios package and copy the contents to a FAT32  USB flash drive
-2) Get the EFI directory from another bios package and copy that directory to the USB flash drive
-      MinisForum  MS-01  bios has it.    Search MS-01
-3) Connect LapDock to MiniMiner
-4) Plug in the USB, re-boot and press F7 and choose to boot from USB
-5) Command:   FS1:    (include the :)  The number could be a different drive number.
-6) Command:   EfiFlash.nsh
+3) Extract the ZIP file on a Windows PC.
 
-7) Redo all the BIOS settings.  They are wiped.
+4) Copy all extracted files onto a USB flash drive formatted as FAT32.
 
-Helpful Link:   https://www.virtualizationhowto.com/community/home-lab-forum/steps-to-upgrade-minisforum-motherboard-bios-bd795m-bd795i-se/
+5) Plug the USB drive into the Pinova P2.
+
+6) Reboot the Pinova P2 and repeatedly press **DEL or F2** to enter BIOS.
+
+7) In BIOS, open the **EZ Flash / M-Flash / Instant Flash** tool 
+   (the menu name may vary slightly).
+
+8) Choose the BIOS file on the USB drive and confirm the update.
+
+9) Wait for the update to complete.
+   The system will reboot automatically.
+
+10) After reboot, enter BIOS again and verify:
+    • Secure Boot = Disabled
+    • Boot Mode = UEFI
+
+11) Press F10 to Save & Exit.
+
+Your BIOS is now updated.
+
 
 
 
@@ -182,9 +194,9 @@ AND COPY AND PASTE INTO nano
 
 Command:   sudo nano /etc/network/interfaces
 #########################################################
-GET THE TEXT FROM DEBIAN PERSONAL
-GET THE TEXT FROM DEBIAN PERSONAL
-GET THE TEXT FROM DEBIAN PERSONAL
+GET THE TEXT FROM DEBIAN PROXY PERSONAL
+GET THE TEXT FROM DEBIAN PROXY PERSONAL
+GET THE TEXT FROM DEBIAN PROXY PERSONAL
 #########################################################
 Ctrl-O,  Enter,  Ctrl-X
 
@@ -246,36 +258,44 @@ Command:   ping google.com
 
 
 
-
-
-
-
-
 ********************  UPDATE THE VIDEO DRIVER  ********************
 
-Command:   sudo apt update
+Command:
 
-#NOT FOR MINISFORM BD795I SE
-NVIDIA GPU Command:   sudo apt install firmware-misc-nonfree   
-#NOT FOR MINISFORM BD795I SE 
+sudo apt install -y \
+  firmware-linux \
+  firmware-linux-nonfree \
+  firmware-amd-graphics
 
-#THIS IS FOR MINISFORM BD795I SE
-AMD GPU Command:   sudo apt install firmware-linux firmware-linux-nonfree firmware-amd-graphics
-#THIS IS FOR MINISFORM BD795I SE
+Reboot to apply updates:
 
-Command:   sudo reboot   (you can do later)
+Command:   sudo reboot
+
+
 
 
 ********************  KEEP DISPLAY ON   ********************
 
-This is for MSI Gaming GeForce GT 710 ONLY.
-This is for MSI Gaming GeForce GT 710 ONLY.
-This is for MSI Gaming GeForce GT 710 ONLY.
+The KAMRUI Pinova P2 uses Intel integrated graphics.
+No special configuration is required to keep the display active.
 
-Command:   echo 'options nouveau runpm=0' | sudo tee /etc/modprobe.d/nouveau-poweroff.conf
-Command:   sudo update-initramfs -u
+If you want to prevent the screen from blanking on the local console:
 
-Command:   sudo reboot   (you can do later)
+Command:   sudo nano /etc/default/console-setup
+
+Add or confirm these lines:
+
+  BLANK_TIME=0
+  POWERDOWN_TIME=0
+
+Save and exit:
+Ctrl-O  Enter  Ctrl-X
+
+Then reboot:
+
+Command:   sudo reboot
+
+This disables automatic console blanking so the display stays on.
 
 
 
@@ -288,19 +308,20 @@ Command:   sudo reboot   (you can do later)
 
 
 
-********************  SETUP XMRIG CONFIG DATA   ********************
+
+********************  SETUP XMRIG-PROXY CONFIG DATA   ********************
 
 Then copy everything into the nano editor below except the ##### bars on the top and bottom.
 
-Command:  sudo nano /etc/miner.env
+Command:  sudo nano /etc/proxy.env
 #########################################################
-GET THE TEXT FROM DEBIAN PERSONAL
-GET THE TEXT FROM DEBIAN PERSONAL
-GET THE TEXT FROM DEBIAN PERSONAL
+GET THE TEXT FROM DEBIAN PROXY PERSONAL
+GET THE TEXT FROM DEBIAN PROXY PERSONAL
+GET THE TEXT FROM DEBIAN PROXY PERSONAL
 #########################################################
 Ctrl-O, Enter, Ctrl-X
 
-Command:   sudo chmod 644 /etc/miner.env
+Command:   sudo chmod 644 /etc/proxy.env
 
 
 
@@ -355,8 +376,8 @@ Command:   sudo nano /usr/local/bin/send_email.sh
 # =====================================
 
 # --- CONFIGURATION ---
-[ -f /etc/miner.env ] && . /etc/miner.env                     # Load /etc/miner.env if it exists
-: "${EMAIL_TO:?ERROR: EMAIL_TO not set in /etc/miner.env}"    # Require EMAIL_TO or exit with error
+[ -f /etc/proxy.env ] && . /etc/proxy.env                     # Load /etc/proxy.env if it exists
+: "${EMAIL_TO:?ERROR: EMAIL_TO not set in /etc/proxy.env}"    # Require EMAIL_TO or exit with error
 
 HOSTNAME_STR=$(hostname)
 
@@ -445,45 +466,41 @@ Command:   sudo apt install -y git build-essential cmake automake libtool autoco
 Command:   sudo apt install -y build-essential cmake git pkg-config libhwloc-dev libuv1-dev libssl-dev
 Command:   sudo apt install -y jq
 
-
-Clone and Build XMRig:
+Clone and Build XMRig Proxy:
 
 Command:   sudo -i
 Command:   cd /root
-Command:   git clone https://github.com/xmrig/xmrig.git
-Command:   cd xmrig
+Command:   git clone https://github.com/xmrig/xmrig-proxy.git
+Command:   cd xmrig-proxy
 Command:   mkdir build && cd build
 Command:   cmake ..
 Command:   make -j$(nproc)
 
 
-Command:   sudo nano /etc/systemd/system/xmrig.service
+
+Command:   sudo nano /etc/systemd/system/xmrig-proxy.service
 #########################################################
 [Unit]
-Description=XMRig Miner
+Description=XMRig Proxy
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Run as root for MSR access
 User=root
-WorkingDirectory=/root/xmrig/build
+WorkingDirectory=/root/xmrig-proxy/build
 
-# Load env vars (EMAIL_TO, XMRIG_* ports/tokens, XMRIG_CMD, etc.)
-EnvironmentFile=/etc/miner.env
+# load /etc/proxy.env
+EnvironmentFile=/etc/proxy.env
 
-# Run the one-line XMRIG command from /etc/miner.env
-ExecStart=/bin/bash -c 'eval "$XMRIG_CMD"'
+# run proxy command defined in env
+ExecStart=/bin/bash -c 'eval "$XMRIG_PROXY_CMD"'
 
-# Auto-restart on failure or hang
 Restart=always
 RestartSec=30
 
-# Nice-to-haves
-Nice=10
+Nice=5
 LimitNOFILE=65535
 
-# Log to journal (works with your journalctl commands)
 StandardOutput=journal
 StandardError=journal
 
@@ -495,33 +512,7 @@ Ctrl-O Enter Ctrl-X
 
 
 Command:   sudo systemctl daemon-reload
-Command:   sudo systemctl enable --now xmrig.service
-
-
-
-
-
-
-
-********************  ALLOCATE HUGE PAGES   ********************
-
-Command:    sudo nano /etc/default/grub
-
-Verify:   GRUB_DEFAULT=0
-	  GRUB_TIMEOUT=5
-          GRUB_DISTRIBUTOR=`( . /etc/os-release && echo ${NAME} )`
-          GRUB_CMDLINE_LINUX_DEFAULT="quiet"
-
-
-Replace line:     GRUB_CMDLINE_LINUX="default_hugepagesz=2M hugepagesz=2M hugepages=1024"
-
-Type:     Ctrl-O   Enter    Ctrl-X
-
-Command:  sudo update-grub
-Command:  sudo reboot   #(you can reboot later)
-
-
-
+Command:   sudo systemctl enable --now xmrig-proxy.service
 
 
 

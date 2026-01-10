@@ -2,14 +2,13 @@
 ********************  COMMON COMMANDS  ********************
 
 
-Check the update log:    sudo tail -n 100 /var/log/xmrig_update.log
+Check the update log:    sudo tail -n 100 /var/log/proxy_update.log
 
-Check the status log:    sudo tail -n 100 /var/log/miner-status.log
+Check the status log:    sudo tail -n 100 /var/log/proxy-status.log
 
-Check a miner on windows:   echo jjasfSGB123 | ncat 192.168.1.35 8080
-    Powershell install ncat command:   winget install Nmap
+Get proxy status:   source /etc/proxy.env && printf '%s\r\n' "$STATUS_TOKEN" | nc -w 2 127.0.0.1 "$STATUS_PORT"
 
-Get miner status:   source /etc/miner.env && printf '%s\r\n' "$STATUS_TOKEN" | nc -w 2 127.0.0.1 "$STATUS_PORT"
+
 
 
 
@@ -32,7 +31,7 @@ Read Temps and Voltages:    sensors
 
 
 
-miner-status-handler.sh is a secure, fault-tolerant telemetry script that runs each time a client connects to the miner’s status port, verifies the provided password, loads configuration from /etc/miner.env, and then collects real-time hashrate, CPU temperature, and wattage using several layered fallback methods to ensure compatibility across different XMRig versions and hardware. It intelligently probes multiple API endpoints to extract the 10-second hashrate, reads temperature from lm-sensors or system thermal files, determines power either from AMD PPT, generic sensor keys, a configured fallback value, or by calculating VRM current × voltage when necessary. Every step is logged to /var/log/miner-status.log, and regardless of errors, the script always returns a clean, machine-readable JSON object containing the miner’s current performance metrics, making it reliable for dashboards, automation tools, and your auto-update system.
+miner-status-handler.sh is a secure, fault-tolerant telemetry script that runs each time a client connects to the miner’s status port, verifies the provided password, loads configuration from /etc/proxy.env, and then collects real-time hashrate, CPU temperature, and workers using several layered fallback methods to ensure compatibility across different XMRig versions and hardware. It intelligently probes multiple API endpoints to extract the 10-second hashrate, reads temperature from lm-sensors or system thermal files, determines power either from AMD PPT, generic sensor keys, a configured fallback value, or by calculating VRM current × voltage when necessary. Every step is logged to /var/log/miner-status.log, and regardless of errors, the script always returns a clean, machine-readable JSON object containing the miner’s current performance metrics, making it reliable for dashboards, automation tools, and your auto-update system.
 
 
 
@@ -40,17 +39,16 @@ miner-status-handler.sh is a secure, fault-tolerant telemetry script that runs e
 
 
 
-********************   MINER STATUS   ********************
+********************   PROXY STATUS   ********************
 
-Command:   sudo nano /usr/local/bin/miner-status-handler.sh
+Command:   sudo nano /usr/local/bin/proxy-status-handler.sh
 #########################################################
 #!/usr/bin/env bash
-# Per-connection handler for miner-status
+# Per-connection handler for proxy-status
 # Version
-# V1.03 - fixed reference to XMRIG_HTTP_PORT
-# V1.04 - added led status
-# V1.05 - added led status to the log
-# V1.06 - turned off the log
+# 1.00 - first version
+# 1.01 - added LED status
+# 1.02 - added CPU Power
 
 LOG_ENABLED=0   #turn off logging to save space
 
@@ -62,12 +60,12 @@ if [ -z "${PASSWORD:-}" ]; then
   exit 0
 fi
 
-# ----- Load runtime configuration (prefer /etc/miner.env) -----
-[ -f /etc/miner.env ] && . /etc/miner.env
+# ----- Load runtime configuration (prefer /etc/proxy.env) -----
+[ -f /etc/proxy.env ] && . /etc/proxy.env
 : "${API_HOST:=127.0.0.1}"
-: "${API_PORT:=${XMRIG_HTTP_PORT:-8086}}"    # XMRig HTTP API port
-: "${API_TOKEN:=${XMRIG_HTTP_TOKEN:-}}"      # XMRig HTTP token
-: "${LOG:=/var/log/miner-status.log}"
+: "${API_PORT:=${PROXY_HTTP_PORT:-8086}}"    # XMRig-Proxy HTTP API port
+: "${API_TOKEN:=${PROXY_HTTP_TOKEN:-}}"      # XMRig-Proxy HTTP token
+: "${LOG:=/var/log/proxy-status.log}"
 
 log() {
   (( LOG_ENABLED )) || return 0
@@ -76,9 +74,9 @@ log() {
 
 # ----- helpers ----------------------------------------------------------
 
-# Read hashrate (10s) from XMRig HTTP API; returns plain integer (no commas)
+# Read hashrate (10s) from XMRig-Proxy HTTP API; returns integer in H/s (value × 1000)
 read_hashrate() {
-  local json h10 curl_rc
+  local json h10_kh curl_rc raw_val
   log "DEBUG: read_hashrate() starting (API_HOST=${API_HOST}, API_PORT=${API_PORT}, API_TOKEN=${API_TOKEN})"
 
   # ----- build curl args -----
@@ -88,57 +86,42 @@ read_hashrate() {
   fi
   log "DEBUG: curl args built: ${curl_args[*]}"
 
-  # ----- use only the configured port and try different paths -----
-  local paths=(/2/summary /1/summary /summary)
+  # ----- use only /2/summary on the configured port -----
+  log "DEBUG: Trying endpoint http://${API_HOST}:${API_PORT}/2/summary"
 
-  for path in "${paths[@]}"; do
-    log "DEBUG: Trying endpoint http://${API_HOST}:${API_PORT}$path"
-    json=$(curl "${curl_args[@]}" "http://${API_HOST}:${API_PORT}$path" 2>>"$LOG"); curl_rc=$?
+  if (( LOG_ENABLED )); then
+    json=$(curl "${curl_args[@]}" "http://${API_HOST}:${API_PORT}/2/summary" 2>>"$LOG" || true); curl_rc=$?
+  else
+    json=$(curl "${curl_args[@]}" "http://${API_HOST}:${API_PORT}/2/summary" 2>/dev/null || true); curl_rc=$?
+  fi
 
-    if [ $curl_rc -ne 0 ]; then
-      log "DEBUG: curl failed (rc=$curl_rc) for http://${API_HOST}:${API_PORT}$path"
-      continue
-    fi
-    if [ -z "$json" ]; then
-      log "DEBUG: empty JSON from $path on port ${API_PORT}"
-      continue
-    fi
+  if [ $curl_rc -ne 0 ]; then
+    log "DEBUG: curl failed (rc=$curl_rc) for port ${API_PORT}/2/summary"
+    return 1
+  fi
+  if [ -z "$json" ]; then
+    log "DEBUG: empty response from ${API_PORT}/2/summary"
+    return 1
+  fi
 
-    log "DEBUG: first 200B of response: $(printf '%s' "$json" | head -c 200)"
+  log "DEBUG: first 200B of response: $(printf '%s' "$json" | head -c 200)"
 
-    # Parse possible JSON shapes
-    h10=$(
-      printf '%s' "$json" | jq -r '
-        if .hashrate? then
-          if (.hashrate|type)=="object" then
-            (.hashrate.total[0] // .hashrate.total_10s // .hashrate["10s"] // empty)
-          elif (.hashrate|type)=="array" then
-            .hashrate[0]
-          else empty end
-        elif .workers? then
-          ([.workers[]
-            | (if .hashrate? and (.hashrate|type)=="object" then .hashrate.total[0]
-               elif .hashrate? and (.hashrate|type)=="array" then .hashrate[0]
-               else empty end)
-          ] | add)
-        else empty end
-      ' | awk 'NF { printf "%.0f", $1 }'
-    )
+  # Extract the 10s total hashrate in kH/s (first element of .hashrate.total array)
+  h10_kh=$(printf '%s' "$json" | jq -r '.hashrate.total[0] // empty')
 
-    log "DEBUG: jq parsed h10='$h10' from $path:${API_PORT}"
+  if [ -n "$h10_kh" ] && [[ "$h10_kh" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    log "DEBUG: raw 10s hashrate (kH/s): $h10_kh"
+    # Multiply by 1000 and round to nearest integer
+    raw_val=$(awk "BEGIN {printf \"%d\", $h10_kh * 1000 + 0.5}")
+    log "DEBUG: converted to H/s (x1000): $raw_val"
+    echo "$raw_val"
+    return 0
+  fi
 
-    if [ -n "$h10" ] && [[ "$h10" =~ ^[0-9]+$ ]]; then
-      log "DEBUG: valid integer hashrate found: $h10"
-      echo "$h10"
-      return 0
-    fi
-
-    log "DEBUG: no valid hashrate.total[0] found in ${path} on port ${API_PORT}"
-  done
-
-  log "DEBUG: all endpoints tried, no valid hashrate found"
+  log "DEBUG: no valid hashrate.total[0] found in /2/summary on port ${API_PORT}"
   return 1
 }
+
 
 
 # Read CPU temperature (Celsius integer)
@@ -163,56 +146,78 @@ read_cpu_temp() {
 
 # Read package/GPU power (Watts, integer) via lm-sensors
 read_watts() {
-  local line val
+  local line val sensors_out
 
-  # Ensure lm-sensors is available (quiet install like the other helpers)
+  log "DEBUG: read_watts() start"
+
+  # Ensure lm-sensors is available
   if ! command -v sensors >/dev/null 2>&1; then
-    log "DEBUG: sensors missing — attempting install"
+    log "DEBUG: sensors not found, attempting install"
     apt-get update -y >>"$LOG" 2>&1 || true
     apt-get install -y lm-sensors >>"$LOG" 2>&1 || true
   fi
 
   if command -v sensors >/dev/null 2>&1; then
-    # Prefer AMD PPT (your sample shows this), else try common power keys
-    line=$(sensors 2>/dev/null | grep -m1 -E '^[[:space:]]*PPT:|^[[:space:]]*Package power:|^[[:space:]]*power1:')
+    log "DEBUG: sensors command found"
+
+    # Capture full sensors output for debugging
+    sensors_out=$(sensors 2>/dev/null)
+    log "DEBUG: sensors output BEGIN"
+    log "$sensors_out"
+    log "DEBUG: sensors output END"
+
+    # Try to extract power line
+    line=$(printf '%s\n' "$sensors_out" | grep -m1 -E '^[[:space:]]*PPT:|^[[:space:]]*Package power:|^[[:space:]]*power1:')
+    log "DEBUG: matched power line: ${line:-<none>}"
+
     if [ -n "$line" ]; then
-      # Extract first numeric value and floor to integer
       val=$(printf '%s' "$line" | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1)
+      log "DEBUG: extracted numeric value: ${val:-<none>}"
+
       if [ -n "$val" ]; then
+        log "DEBUG: returning watts=${val%.*}"
         printf '%s' "${val%.*}"
         return 0
       fi
     fi
+  else
+    log "DEBUG: sensors still unavailable after install attempt"
   fi
 
-  # Final fallback: use env default if provided
-  if [ -n "${WATTS:-}" ]; then
-    printf '%s' "${WATTS}"
+  log "DEBUG: watt detection failed, returning fallback 0"
+  printf '0'
+  return 0
+}
+
+
+# Read number of connected workers (miners) from XMRig-Proxy HTTP API
+read_workers() {
+  local json workers
+
+  # Build curl command with optional auth
+  local curl_args=(-fsS --max-time 3)
+  if [ -n "${API_TOKEN:-}" ]; then
+    curl_args+=(-H "Authorization: Bearer $API_TOKEN")
+  fi
+
+  # Fetch directly from the configured host:port /2/summary
+  json=$(curl "${curl_args[@]}" "http://$API_HOST:$API_PORT/2/summary" 2>/dev/null)
+
+  # If no response, fail silently
+  [ -z "$json" ] && return 1
+
+  # Get the worker count — prefer .workers, fall back to .miners.now just in case
+  workers=$(printf '%s' "$json" | jq -r '.workers // .miners.now // empty')
+
+  # Validate it's a non-negative integer
+  if [[ "$workers" =~ ^[0-9]+$ ]] && [ "$workers" -ge 0 ]; then
+    printf '%s' "$workers"
     return 0
   fi
 
   return 1
 }
 
-# Fallback: Calculate CPU power from VRM current × core voltage (for Miner2)
-read_watts_fallback() {
-  local current voltage watts
-  if ! command -v sensors >/dev/null 2>&1; then
-    return 1
-  fi
-
-  current=$(sensors 2>/dev/null | grep -m1 "CPU VRM Output Current:" | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1)
-  voltage=$(sensors 2>/dev/null | grep -m1 "CPU Core Voltage:" | grep -oE '[0-9]+(\.[0-9]+)?' | head -n1)
-
-  if [[ -z "$current" || -z "$voltage" ]]; then
-    return 1
-  fi
-
-  # Multiply and round down to integer
-  watts=$(awk "BEGIN {printf \"%d\", $current * $voltage}")
-  printf '%s' "$watts"
-  return 0
-}
 
 # Read current LED status from watchdog file (single word: off/red/green)
 read_led_status() {
@@ -253,70 +258,70 @@ if output=$(read_cpu_temp 2>/dev/null) && [[ "$output" =~ ^[0-9]+$ ]]; then
 fi
 
 WT=0
-if output=$(read_watts 2>/dev/null) && [[ "$output" =~ ^[0-9]+$ ]] && [ "$output" -gt 0 ]; then
+if output=$(read_watts 2>/dev/null) && [[ "$output" =~ ^[0-9]+$ ]]; then
   WT="$output"
-else
-  if output=$(read_watts_fallback 2>/dev/null) && [[ "$output" =~ ^[0-9]+$ ]] && [ "$output" -gt 0 ]; then
-    WT="$output"
-    log "INFO: Used fallback VRM current × voltage for watts: $WT"
-  fi
+fi
+
+WK=0
+if output=$(read_workers 2>/dev/null) && [[ "$output" =~ ^[0-9]+$ ]] && [ "$output" -gt 0 ]; then
+  WK="$output"
 fi
 
 LS=$(read_led_status)
-log "RESULT: hashrate=$HR temp=$TC watts=$WT led=$LS"
-printf '{"hashrate":%s,"temp":%s,"watts":%s,"led":"%s"}\r\n' "$HR" "$TC" "$WT" "$LS"
+log "RESULT: hashrate=$HR temp=$TC watts=$WT workers=$WK led=$LS"
+printf '{"hashrate":%s,"temp":%s,"watts":%s,"workers":%s,"led":"%s"}\r\n' "$HR" "$TC" "$WT" "$WK" "$LS"
 #########################################################
 Ctrl-O, Enter, Ctrl-X
 
 
 
-Command:   sudo chmod +x /usr/local/bin/miner-status-handler.sh
+Command:   sudo chmod +x /usr/local/bin/proxy-status-handler.sh
 
 
 
 
 
-Command:   sudo nano /usr/local/bin/miner-status.sh
+Command:   sudo nano /usr/local/bin/proxy-status.sh
 #########################################################
 #!/usr/bin/env bash
-# miner-status.sh — tiny TCP JSON server (socat-based)
+# proxy-status.sh — tiny TCP JSON server (socat-based)
 set -euo pipefail
-[ -f /etc/miner.env ] && . /etc/miner.env  
+[ -f /etc/proxy.env ] && . /etc/proxy.env  
 
-# Only export the TCP server password; handler loads the rest from /etc/miner.env
-export PASSWORD="${STATUS_TOKEN}"   # from /etc/miner.env
-PORT="${STATUS_PORT}"                 # from /etc/miner.env
+# Only export the TCP server password; handler loads the rest from /etc/proxy.env
+export PASSWORD="${STATUS_TOKEN}"   # from /etc/proxy.env
+PORT="${STATUS_PORT}"                 # from /etc/proxy.env
 
-echo "miner-status listening on :$PORT (password required)" >&2
+echo "proxy-status listening on :$PORT (password required)" >&2
 
 # -T 5: I/O timeout; fork: one process per client; -d -d -v: verbose logs
 exec socat -d -d -v -T 5 \
   TCP-LISTEN:"$PORT",reuseaddr,fork \
-  EXEC:'/usr/local/bin/miner-status-handler.sh',stderr
+  EXEC:'/usr/local/bin/proxy-status-handler.sh',stderr
 #########################################################
 Ctrl-O, Enter, Ctrl-X
 
 
 
-Command:   sudo chmod +x /usr/local/bin/miner-status.sh
+Command:   sudo chmod +x /usr/local/bin/proxy-status.sh
 
-Command:   sudo chmod 755 /usr/local/bin/miner-status.sh
+Command:   sudo chmod 755 /usr/local/bin/proxy-status.sh
 
 Command:   sudo apt update
 Command:   sudo apt install -y socat netcat-openbsd
 Command:   sudo apt install -y curl
 
 
-Command:   sudo nano /etc/systemd/system/miner-status.service
+Command:   sudo nano /etc/systemd/system/proxy-status.service
 #########################################################
 [Unit]
-Description=Miner Status JSON Server
+Description=Proxy Status JSON Server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/miner-status.sh
+ExecStart=/usr/local/bin/proxy-status.sh
 Restart=always
 RestartSec=2
 User=root
@@ -331,26 +336,35 @@ Ctrl-O Enter Ctrl-X
 
 
 
-Command:   sudo chmod 644 /etc/systemd/system/miner-status.service
+Command:   sudo chmod 644 /etc/systemd/system/proxy-status.service
 
 Command:   sudo systemctl daemon-reload
-Command:   sudo systemctl enable --now miner-status.service
+Command:   sudo systemctl enable --now proxy-status.service
   
 
 Command:   sudo reboot
 
-Test the script on the same machine:   source /etc/miner.env && printf '%s\r\n' "$STATUS_TOKEN" | nc -w 2 127.0.0.1 "$STATUS_PORT"
+Test the script on the same machine:   source /etc/proxy.env && printf '%s\r\n' "$STATUS_TOKEN" | nc -w 2 127.0.0.1 "$STATUS_PORT"
 
-If it doesn't work:   sudo journalctl -u miner-status -f
+If it doesn't work:   sudo journalctl -u proxy-status -f
 If it still doesn't work, run all the steps above on this page again.
-If it still doesn't work, give the source and log to AI:   sudo tail -f /var/log/miner-status.log  
+If it still doesn't work, give the source and log to AI:   sudo tail -f /var/log/proxy-status.log  
 
-Correct Result:    {"hashrate":17421,"temp":70,"watts":104,"led":"green"}
+Correct Result:    {"hashrate":109500,"temp":38,"workers":8,"led":"green"}
+
 
 
 Powershell test the script on windows:   echo jjasfSGB122$@ | ncat 192.168.1.35 8080
     Powershell install ncat command:   winget install Nmap
    
+
+
+
+
+
+
+
+
 
 
 
@@ -372,38 +386,36 @@ This XMRig auto-update script is a fully automated maintenance system that check
 
 
 
-********************  XMRIG AUTO UPDATE   ********************
+********************  PROXY AUTO UPDATE   ********************
 
-Command:   sudo nano /usr/local/bin/xmrig-auto-update.sh
+Command:   sudo nano /usr/local/bin/proxy-auto-update.sh
 #########################################################
 #!/bin/bash
-#Version
-#1.00 - First Version
-#1.01 - removed extra code
-# XMRig auto-update (root)
-# Logs: /var/log/xmrig_update.log
+#Version 1.0
+# proxy-auto-update (root)
+# Logs: /var/log/proxy_update.log
 # Uses: /usr/local/bin/send_email.sh (provides send_email(subject, body))
 
 set -o pipefail
 
-REPO_DIR="/root/xmrig"
+REPO_DIR="/root/xmrig-proxy"
 BUILD_DIR="$REPO_DIR/build"
-BIN="$BUILD_DIR/xmrig"
-LOG="/var/log/xmrig_update.log"
-GITHUB_API="https://api.github.com/repos/xmrig/xmrig/releases/latest"
+BIN="$BUILD_DIR/xmrig-proxy"
+LOG="/var/log/proxy_update.log"
+GITHUB_API="https://api.github.com/repos/xmrig/xmrig-proxy/releases/latest"
 
 HOSTNAME_STR="$(hostname)"    # Store hostname to speed up processing
 
-if [ ! -f /etc/miner.env ]; then
-  echo "ERROR: Required configuration file /etc/miner.env not found!" >&2
+if [ ! -f /etc/proxy.env ]; then
+  echo "ERROR: Required configuration file /etc/proxy.env not found!" >&2
   exit 1
 fi
-. /etc/miner.env
+. /etc/proxy.env
 
-# ---- miner-status TCP JSON server (your socat listener) ----------------------
-MINER_HOST="127.0.0.1"
-# STATUS_PORT     from /etc/miner.env
-# STATUS_TOKEN    from /etc/miner.env
+# ---- proxy-status TCP JSON server (your socat listener) ----------------------
+PROXY_HOST="127.0.0.1"
+# STATUS_PORT     from /etc/proxy.env
+# STATUS_TOKEN    from /etc/proxy.env
 
 # --- Load reusable email function --------------------------------------------
 SEND_EMAIL_LIB="/usr/local/bin/send_email.sh"
@@ -424,17 +436,6 @@ log() {
   fi
 }
 
-# Delay emails by (hostname number × 30s); no delay if no number
-host_email_delay() {
-  local n d
-  n="$(echo "$HOSTNAME_STR" | grep -oE '[0-9]+' | head -n1)"
-  if [ -n "$n" ]; then
-    d=$(( n * 30 ))
-    log "Email delay: ${d}s (hostname number ${n})"
-    sleep "$d"
-  fi
-}
-
 # ---- Get Motherboard Firmware (BIOS/UEFI) ------------------------------------
 get_motherboard_firmware() {
   local firmware="Unknown" raw_name="Unknown" manufacturer="Unknown" display_name="Unknown"
@@ -451,44 +452,53 @@ get_motherboard_firmware() {
     firmware=$(sudo dmidecode -s bios-version 2>/dev/null | head -n1)
     raw_name=$(sudo dmidecode -s baseboard-product-name 2>/dev/null | head -n1)
     manufacturer=$(sudo dmidecode -s baseboard-manufacturer 2>/dev/null | head -n1)
+
+    # Try system fields if baseboard is generic
+    if [[ "$raw_name" == "Default string" || -z "$raw_name" ]]; then
+      raw_name=$(sudo dmidecode -s system-product-name 2>/dev/null | head -n1)
+      manufacturer=$(sudo dmidecode -s system-manufacturer 2>/dev/null | head -n1)
+    fi
   fi
 
-  raw_name="${raw_name%% *}"        # strip everything after first space
+  raw_name="${raw_name:-Unknown}"
+  manufacturer="${manufacturer:-Unknown}"
+  raw_name="${raw_name%% *}"      # strip everything after first space
   manufacturer="${manufacturer%% *}"
 
   # ── ONE giant case statement to rule them all ──
   case "$raw_name" in
-    DRFXL|DRFXL*)                              display_name="BD795i SE" ;;
-    B75|B75-*)                                 display_name="Biostar TB75" ;;
-    TB85|TB85-*)                               display_name="Biostar TB85" ;;
-    TB250-BTC|TB250-BTC*)                      display_name="Biostar TB250-BTC" ;;
-    TB360-BTC|TB360-BTC*)                      display_name="Biostar TB360-BTC" ;;
-    B250|B250-*)                               display_name="ASUS / MSI Mining Expert" ;;
-
+    DRFXL|DRFXL*) display_name="BD795i SE" ;;
+    B75|B75-*) display_name="Biostar TB75" ;;
+    TB85|TB85-*) display_name="Biostar TB85" ;;
+    TB250-BTC|TB250-BTC*) display_name="Biostar TB250-BTC" ;;
+    TB360-BTC|TB360-BTC*) display_name="Biostar TB360-BTC" ;;
+    B250|B250-*) display_name="ASUS / MSI Mining Expert" ;;
     # ASUS ROG / Prime
     "ROG CROSSHAIR VII HERO"|"CROSSHAIR VII HERO"* ) display_name="ASUS ROG Crosshair VII Hero" ;;
-    "ROG CROSSHAIR VIII"* )                    display_name="ASUS ROG Crosshair VIII $raw_name" ;;
-    "ROG STRIX"* )                             display_name="ASUS ROG Strix $raw_name" ;;
-    "PRIME X570"*|"PRIME B550"* )              display_name="ASUS Prime $raw_name" ;;
-
+    "ROG CROSSHAIR VIII"* ) display_name="ASUS ROG Crosshair VIII $raw_name" ;;
+    "ROG STRIX"* ) display_name="ASUS ROG Strix $raw_name" ;;
+    "PRIME X570"*|"PRIME B550"* ) display_name="ASUS Prime $raw_name" ;;
     # MSI
-    "MEG X570"*"ACE"*|"MEG X570"*"UNIFY"* )    display_name="MSI MEG X570 $raw_name" ;;
-    "MPG X570"*|"MPG B550"* )                  display_name="MSI MPG $raw_name" ;;
-    "B550"*|"X570"* )                          display_name="MSI $raw_name" ;;
-
+    "MEG X570"*"ACE"*|"MEG X570"*"UNIFY"* ) display_name="MSI MEG X570 $raw_name" ;;
+    "MPG X570"*|"MPG B550"* ) display_name="MSI MPG $raw_name" ;;
+    "B550"*|"X570"* ) display_name="MSI $raw_name" ;;
     # Gigabyte Aorus
-    "X570 AORUS"*)                             display_name="Gigabyte X570 Aorus $raw_name" ;;
-    "B550 AORUS"*)                             display_name="Gigabyte B550 Aorus $raw_name" ;;
-
+    "X570 AORUS"*) display_name="Gigabyte X570 Aorus $raw_name" ;;
+    "B550 AORUS"*) display_name="Gigabyte B550 Aorus $raw_name" ;;
     # ASRock
-    "X570 Taichi"|"X570 Phantom"*)             display_name="ASRock $raw_name" ;;
-
-    # Generic / unknown – still look nice
-    *) if [[ "$manufacturer" != "Unknown" && "$raw_name" != "Unknown" ]]; then
-         display_name="$manufacturer $raw_name"
-       else
-         display_name="${raw_name:-System Product Name}"
-       fi ;;
+    "X570 Taichi"|"X570 Phantom"*) display_name="ASRock $raw_name" ;;
+    # Generic/OEM fallback: use MOTHERBOARD_NAME from /etc/proxy.env
+    "Default string"|"Default"|"Unknown"|"" )
+      display_name="${MOTHERBOARD_NAME:-Generic Mini PC}"
+      ;;
+    # Normal branded boards
+    *) 
+      if [[ "$manufacturer" != "Unknown" && "$raw_name" != "Unknown" ]]; then
+        display_name="$manufacturer $raw_name"
+      else
+        display_name="${MOTHERBOARD_NAME:-Generic Mini PC}"
+      fi
+      ;;
   esac
 
   # ── Export ──
@@ -496,83 +506,71 @@ get_motherboard_firmware() {
   MB_NAME="$display_name"
   MB_RAW_NAME="${raw_name:-Unknown}"
   MB_MANUFACTURER="${manufacturer:-Unknown}"
-
   log "Motherboard: $MB_NAME | Firmware: $MB_FIRMWARE"
 }
 
 # ---- Metrics via miner-status ------------------------------------------------
 # Ensures jq exists, calls the TCP endpoint once, and fills globals:
-#   HR_NOW TEMP_NOW WATTS_NOW  (integers; 0 on failure)
+# HR_NOW TEMP_NOW WORKERS_NOW (integers; 0 on failure)
 get_metrics_now() {
-  local json hr tc wt
-
+  local json hr tc wk
   # jq (quiet install if missing)
   if ! command -v jq >/dev/null 2>&1; then
     log "Installing jq for JSON parsing..."
     apt update -y >>"$LOG" 2>&1 && apt install -y jq >>"$LOG" 2>&1 || true
   fi
-
   # netcat variants differ; try GNU -w/-q combo if available
   if printf '%s\r\n' "$STATUS_TOKEN" | nc -h 2>&1 | grep -q -- '-q '; then
-    json=$(printf '%s\r\n' "$STATUS_TOKEN" | nc -w 3 -q 1 "$MINER_HOST" "$STATUS_PORT" 2>>"$LOG" || true)
+    json=$(printf '%s\r\n' "$STATUS_TOKEN" | nc -w 3 -q 1 "$PROXY_HOST" "$STATUS_PORT" 2>>"$LOG" || true)
   else
-    json=$(printf '%s\r\n' "$STATUS_TOKEN" | nc -w 3 "$MINER_HOST" "$STATUS_PORT" 2>>"$LOG" || true)
+    json=$(printf '%s\r\n' "$STATUS_TOKEN" | nc -w 3 "$PROXY_HOST" "$STATUS_PORT" 2>>"$LOG" || true)
   fi
-
   if [ -z "$json" ]; then
     log "NOTICE: miner-status returned empty response"
-    HR_NOW=0; TEMP_NOW=0; WATTS_NOW=0
+    HR_NOW=0; TEMP_NOW=0; WORKERS_NOW=0
     return 1
   fi
-
-  # Parse integers; enforce numeric, strip nulls
+  # Parse integers; enforce numeric, default to 0 on null/missing
   hr=$(printf '%s' "$json" | jq -r '.hashrate // 0' 2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
-  tc=$(printf '%s' "$json" | jq -r '.temp // 0'      2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
-  wt=$(printf '%s' "$json" | jq -r '.watts // 0'     2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
-
+  tc=$(printf '%s' "$json" | jq -r '.temp // 0' 2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
+  wk=$(printf '%s' "$json" | jq -r '.workers // 0' 2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
   [[ "$hr" =~ ^[0-9]+$ ]] || hr=0
   [[ "$tc" =~ ^[0-9]+$ ]] || tc=0
-  [[ "$wt" =~ ^[0-9]+$ ]] || wt=0
-
+  [[ "$wk" =~ ^[0-9]+$ ]] || wk=0
   HR_NOW="$hr"
   TEMP_NOW="$tc"
-  WATTS_NOW="$wt"
+  WORKERS_NOW="$wk"
   return 0
 }
 
-# Same, but fills HR_AFTER/TEMP_AFTER/WATTS_AFTER
+# Same, but fills HR_AFTER/TEMP_AFTER/WORKERS_AFTER
 get_metrics_after() {
-  local json hr tc wt
-
+  local json hr tc wk
   if ! command -v jq >/dev/null 2>&1; then
     apt update -y >>"$LOG" 2>&1 && apt install -y jq >>"$LOG" 2>&1 || true
   fi
-
   if printf '%s\r\n' "$STATUS_TOKEN" | nc -h 2>&1 | grep -q -- '-q '; then
-    json=$(printf '%s\r\n' "$STATUS_TOKEN" | nc -w 3 -q 1 "$MINER_HOST" "$STATUS_PORT" 2>>"$LOG" || true)
+    json=$(printf '%s\r\n' "$STATUS_TOKEN" | nc -w 3 -q 1 "$PROXY_HOST" "$STATUS_PORT" 2>>"$LOG" || true)
   else
-    json=$(printf '%s\r\n' "$STATUS_TOKEN" | nc -w 3 "$MINER_HOST" "$STATUS_PORT" 2>>"$LOG" || true)
+    json=$(printf '%s\r\n' "$STATUS_TOKEN" | nc -w 3 "$PROXY_HOST" "$STATUS_PORT" 2>>"$LOG" || true)
   fi
-
   hr=$(printf '%s' "$json" | jq -r '.hashrate // 0' 2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
-  tc=$(printf '%s' "$json" | jq -r '.temp // 0'      2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
-  wt=$(printf '%s' "$json" | jq -r '.watts // 0'     2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
-
+  tc=$(printf '%s' "$json" | jq -r '.temp // 0' 2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
+  wk=$(printf '%s' "$json" | jq -r '.workers // 0' 2>>"$LOG" | awk 'NF{printf "%.0f",$1}')
   [[ "$hr" =~ ^[0-9]+$ ]] || hr=0
   [[ "$tc" =~ ^[0-9]+$ ]] || tc=0
-  [[ "$wt" =~ ^[0-9]+$ ]] || wt=0
-
+  [[ "$wk" =~ ^[0-9]+$ ]] || wk=0
   HR_AFTER="$hr"
   TEMP_AFTER="$tc"
-  WATTS_AFTER="$wt"
+  WORKERS_AFTER="$wk"
 }
 
 perform_system_update() {
   log "Waiting 1 minute before system upgrade..."
   sleep 60
 
-  log "Stopping xmrig before system upgrade..."
-  systemctl stop xmrig >>"$LOG" 2>&1 || true
+  log "Stopping xmrig-proxy before system upgrade..."
+  systemctl stop xmrig-proxy >>"$LOG" 2>&1 || true
 
   log "Running full Debian system upgrade..."
   export DEBIAN_FRONTEND=noninteractive
@@ -582,9 +580,9 @@ perform_system_update() {
 }
 
 # ---- Begin -------------------------------------------------------------------
-log "Starting XMRig Auto Update..."
+log "Starting XMRig-Proxy Auto Update..."
 log "==============================="
-log "Checking for XMRig updates..."
+log "Checking for XMRig-Proxy updates..."
 
 if ! command -v curl >/dev/null 2>&1; then
   log "Installing curl..."
@@ -611,11 +609,10 @@ if [ -z "$LATEST_VER" ]; then
   log "ERROR: Failed to fetch latest version from GitHub."
   perform_system_update
 
-  EMAIL_SUBJECT="$HOSTNAME_STR XMRig Check Error"
+  EMAIL_SUBJECT="$HOSTNAME_STR XMRig-Proxy Check Error"
   log "Sending email: $EMAIL_SUBJECT"
   log "Rebooting after email is sent to apply updates."
 
-  host_email_delay
   send_email "$EMAIL_SUBJECT" "[$(ts)] Could not fetch latest version.
 See $LOG"
   log "Rebooting to apply updates..."
@@ -623,7 +620,7 @@ See $LOG"
   exit 0
 fi
 
-log "Local : $LOCAL_VER | HR: ${HR_NOW:-0} H/s | Temp: ${TEMP_NOW:-0} C | Watts: ${WATTS_NOW:-0} W"
+log "Local : $LOCAL_VER | HR: ${HR_NOW:-0} H/s | Temp: ${TEMP_NOW:-0} C | Workers: ${WORKERS_NOW:-0}"
 log "Latest: $LATEST_VER"
 
 # Already current
@@ -632,27 +629,26 @@ if [ "$LOCAL_VER" = "$LATEST_VER" ]; then
 
   perform_system_update
 
-  EMAIL_SUBJECT="$HOSTNAME_STR XMRig Current V$LOCAL_VER ${HR_NOW:-0} H/s (${TEMP_NOW:-0}C, ${WATTS_NOW:-0}W)"
+  EMAIL_SUBJECT="$HOSTNAME_STR XMRig-Proxy Current V$LOCAL_VER ${HR_NOW:-0} H/s ${TEMP_NOW:-0}C ${WORKERS_NOW:-0} Workers"
   log "Sending email: $EMAIL_SUBJECT"
   log "Rebooting after email is sent to apply updates."
 
   BODY="Host: $HOSTNAME_STR
 When: $(ts)
-Status: XMRig is current.
+Status: XMRig-Proxy is current.
 Local version:  $LOCAL_VER
 Latest version: $LATEST_VER
 Hashrate (now): ${HR_NOW:-0} H/s
 CPU Temp:       ${TEMP_NOW:-0} C
-Watts:          ${WATTS_NOW:-0} W
+Workers:        ${WORKERS_NOW:-0}
 Motherboard:    $MB_NAME
 Motherboard Firmware: $MB_FIRMWARE
 
 =====================================
- Last 200 lines of xmrig_update.log
+ Last 200 lines of proxy_update.log
 =====================================
-$(awk 'index($0,"Starting XMRig Auto Update"){last=NR} {lines[NR]=$0} END{start=last?last:(NR-199); if(start<1) start=1; for(i=start;i<=NR;i++) print lines[i] }' "$LOG" 2>/dev/null | tail -n 200)"
+$(awk 'index($0,"Starting Proxy Auto Update"){last=NR} {lines[NR]=$0} END{start=last?last:(NR-199); if(start<1) start=1; for(i=start;i<=NR;i++) print lines[i] }' "$LOG" 2>/dev/null | tail -n 200)"
 
-  host_email_delay
   send_email "$EMAIL_SUBJECT" "$BODY"
   log "Rebooting to apply updates..."
   /sbin/reboot
@@ -661,7 +657,7 @@ fi
 
 # ----- Update -----
 log "Update available. Stopping service..."
-systemctl stop xmrig >>"$LOG" 2>&1
+systemctl stop xmrig-proxy >>"$LOG" 2>&1
 
 cd "$REPO_DIR" || { log "ERROR: cannot cd $REPO_DIR"; exit 1; }
 log "Fetching tags..."
@@ -675,20 +671,18 @@ cd "$BUILD_DIR" || { log "ERROR: cannot cd $BUILD_DIR"; exit 1; }
 cmake .. >>"$LOG" 2>&1 && make -j"$(nproc)" >>"$LOG" 2>&1
 
 if [ ! -x "$BIN" ]; then
-  log "ERROR: XMRig binary not built: $BIN missing"
-  host_email_delay
-  send_email "$HOSTNAME_STR XMRig Build FAILED" "make succeeded but $BIN not executable.\n\n$(tail -50 "$LOG")"
+  log "ERROR: XMRig-Proxy binary not built: $BIN missing"
+  send_email "$HOSTNAME_STR XMRig-Proxy Build FAILED" "make succeeded but $BIN not executable.\n\n$(tail -50 "$LOG")"
   exit 1
 fi
 if ! "$BIN" --version 2>/dev/null | grep -q "$LATEST_VER"; then
   log "ERROR: Version mismatch after build. Expected $LATEST_VER"
-  host_email_delay
-  send_email "$HOSTNAME_STR XMRig Build FAILED" "Built binary does not report version $LATEST_VER.\n\n$("$BIN" --version 2>&1 || echo 'No version')\n\n$(tail -50 "$LOG")"
+  send_email "$HOSTNAME_STR XMRig-Proxy Build FAILED" "Built binary does not report version $LATEST_VER.\n\n$("$BIN" --version 2>&1 || echo 'No version')\n\n$(tail -50 "$LOG")"
   exit 1
 fi
 
-log "Restarting xmrig..."
-systemctl restart xmrig >>"$LOG" 2>&1
+log "Restarting xmrig-proxy..."
+systemctl restart xmrig-proxy >>"$LOG" 2>&1
 log "Update complete."
 
 log "Waiting 5 minutes for new hashrate to stabilize..."
@@ -698,32 +692,31 @@ NEW_VER=$("$BIN" --version 2>/dev/null | head -n1 | grep -oE '[0-9]+(\.[0-9]+)*'
 [ -z "$NEW_VER" ] && NEW_VER="$LATEST_VER"
 
 get_metrics_after || true
-log "Now running: $NEW_VER | HR: ${HR_AFTER:-0} H/s | Temp: ${TEMP_AFTER:-0} C | Watts: ${WATTS_AFTER:-0} W"
+log "Now running: $NEW_VER | HR: ${HR_AFTER:-0} H/s | Temp: ${TEMP_AFTER:-0} C | Workers: ${WORKERS_AFTER:-0}"
 perform_system_update
 
-EMAIL_SUBJECT="$HOSTNAME_STR Updated to V$NEW_VER ${HR_AFTER:-0} H/s (${TEMP_AFTER:-0}C, ${WATTS_AFTER:-0}W)"
+EMAIL_SUBJECT="$HOSTNAME_STR Updated to V$NEW_VER ${HR_AFTER:-0} H/s ${TEMP_AFTER:-0}C ${WORKERS_AFTER:-0} Workers"
 log "Sending email: $EMAIL_SUBJECT"
 log "Rebooting after email is sent to apply updates."
 
 BODY="Host: $HOSTNAME_STR
 When: $(ts)
-Action: XMRig auto-update applied
+Action: XMRig-Proxy auto-update applied
 From: $LOCAL_VER
 To:   $NEW_VER
 Hashrate (before/after): ${HR_NOW:-0} / ${HR_AFTER:-0} H/s
 CPU Temp (before/after): ${TEMP_NOW:-0} / ${TEMP_AFTER:-0} C
-Watts (before/after):    ${WATTS_NOW:-0} / ${WATTS_AFTER:-0} W
+Workers (before/after):  ${WORKERS_NOW:-0} / ${WORKERS_AFTER:-0}
 Motherboard:             $MB_NAME
 Motherboard Firmware:    $MB_FIRMWARE
-Service: xmrig.service (restarted)
+Service: xmrig-proxy.service (restarted)
 
 
 =====================================
- Last 200 lines of xmrig_update.log
+ Last 200 lines of proxy_update.log
 =====================================
-$(awk 'index($0,"Starting XMRig Auto Update"){last=NR} {lines[NR]=$0} END{start=last?last:(NR-199); if(start<1) start=1; for(i=start;i<=NR;i++) print lines[i] }' "$LOG" 2>/dev/null | tail -n 200)"
+$(awk 'index($0,"Starting Proxy Auto Update"){last=NR} {lines[NR]=$0} END{start=last?last:(NR-199); if(start<1) start=1; for(i=start;i<=NR;i++) print lines[i] }' "$LOG" 2>/dev/null | tail -n 200)"
 
-host_email_delay
 send_email "$EMAIL_SUBJECT" "$BODY"
 log "Rebooting to apply updates..."
 /sbin/reboot
@@ -734,17 +727,17 @@ Ctrl-O, Enter, Ctrl-X
 
 
 
-Command:   sudo chmod +x /usr/local/bin/xmrig-auto-update.sh
+Command:   sudo chmod +x /usr/local/bin/proxy-auto-update.sh
 
 Command:   sudo crontab -e
 Choose:  1
-Add this to the bottom:     17 2 * * 0 /usr/local/bin/xmrig-auto-update.sh
+Add this to the bottom:     57 1 * * 0 /usr/local/bin/proxy-auto-update.sh
 
-Test it manually:    sudo /usr/local/bin/xmrig-auto-update.sh
+Test it manually:    sudo /usr/local/bin/proxy-auto-update.sh
 
 	System will auto reboot after 1 minute if it works
 
-Check the log:    sudo tail -n 30 /var/log/xmrig_update.log 
+Check the log:    sudo tail -n 30 /var/log/proxy_update.log 
 
 
 

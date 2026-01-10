@@ -1,0 +1,4 @@
+This folder is for setting up an XMRig Proxy server on a KAMRUI Pinova P2 Mini PC
+
+
+The purpose of a proxy server is to lower the bandwidth on mining pools and put account configuration in a single location.   The local miners just point to the local proxy server on the network to be allocated shares from the mining pool.

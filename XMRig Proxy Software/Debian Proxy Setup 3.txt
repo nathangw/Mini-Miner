@@ -2,13 +2,13 @@
 
 ********************  COMMON COMMANDS  ********************
 
-Clear the watchdog log:   sudo truncate -s 0 /var/log/miner-watchdog.log
+Clear the watchdog log:   sudo truncate -s 0 /var/log/proxy-watchdog.log
 
-View the watchdog log:   sudo tail -n 50 /var/log/miner-watchdog.log
+View the watchdog log:   sudo tail -n 50 /var/log/proxy-watchdog.log
 
-View the watchdog log live:    sudo tail -f /var/log/miner-watchdog.log
+View the watchdog log live:    sudo tail -f /var/log/proxy-watchdog.log
 
-Watchdog Status:   sudo systemctl status miner-watchdog   
+Watchdog Status:   sudo systemctl status proxy-watchdog   
 
 
 
@@ -72,55 +72,52 @@ Check the log:   sudo ras-mc-ctl --errors
 
 
 
-The miner watchdog is a continuous monitoring script that checks the miner’s hashrate, CPU temperature, and power every few seconds using the local miner-status server, compares those values against thresholds loaded from /etc/miner.env, and tracks how long any abnormal condition persists. If the miner becomes too cold, too hot, or maintains a low hashrate for either short-term or long-term periods—and enough time has passed since the last reboot—it performs a safe automatic reboot after emailing a detailed report containing current metrics and recent log excerpts. It also manages a USB status LED, pulsing green when healthy, red when warm, and turning off during error states or just before reboot. The watchdog ensures only one copy runs, logs all key events, sends a startup status email after five minutes, and ultimately acts as a full health-protection and recovery system to keep the miner running reliably and autonomously.
 
 
 
 
 
 
+********************  PROXY WATCHDOG   ********************
 
-********************  MINER WATCHDOG   ********************
 
-
-Command:   sudo nano /usr/local/bin/miner-watchdog.sh
+Command:   sudo nano /usr/local/bin/proxy-watchdog.sh
 #########################################################
 #!/bin/bash
-# miner-watchdog.sh — Monitors miner via miner-status server and enforces auto-reboot rules
+# proxy-watchdog.sh — Monitors xmrig-proxy via proxy-status server and enforces auto-reboot rules
 # (c) 2026 Nathan Gwozdecki
 # Version
-# 1.7 - added diagnostic network info to all emails.
-# 1.8 - added more network diagnostics to all emails.
-# 1.9 - organized functions better
-# 2.0 - fixed email subject bug
-# 2.1 - added daily DNS internet check 
-# 2.2 - cleaned LED code, removed bc dependenacy, added dependency checks, internet check every hour
+# 1.1 - first version
+# 1.1 - led status is saved to a file
+# 1.2 - added 1 hour hash rate average.
+# 1.3 - neatened LED code, added dependency check.
 
 set -Eeuo pipefail      		       # note the extra -E so ERR fires in functions/$(...)
-[ -f /etc/miner.env ] && . /etc/miner.env      # load shared configuration (STATUS_PORT, STATUS_TOKEN, XMRIG vars, etc.)
 
 #set -x   #(REMOVE)  Use this for debugging crashes by logging all commands
-         #Command to clear the log:   sudo truncate -s 0 /var/log/miner-watchdog.log
-         #Command to search the log:   tac /var/log/miner-watchdog.log | grep -i -m 1 -C 5 "line" | tac
+         #Command to clear the log:   sudo truncate -s 0 /var/log/proxy-watchdog.log
+         #Command to search the log:   tac /var/log/proxy-watchdog.log | grep -i -m 1 -C 5 "line" | tac
+
+[ -f /etc/proxy.env ] && . /etc/proxy.env      # load shared configuration (STATUS_PORT, STATUS_TOKEN, XMRIG vars, etc.)
 
 # ---- single-instance lock ----
-exec {LOCKFD}<>/run/miner-watchdog.lock || exit 0
+exec {LOCKFD}<>/run/proxy-watchdog.lock || exit 0
 flock -n "$LOCKFD" || exit 0
 
-LOG="/var/log/miner-watchdog.log"
-PASSWORD="${STATUS_TOKEN}"    # use shared STATUS_TOKEN from /etc/miner.env for local miner authentication
+LOG="/var/log/proxy-watchdog.log"
 
-MINER_HOST="127.0.0.1"
-MINER_PORT="${STATUS_PORT}"   # use STATUS_PORT from /etc/miner.env for the local miner-status TCP listener
 LOOP_INTERVAL=10   #DO NOT SET LESS THAN 6 SECONDS
 
-# --- Default Thresholds if not found in miner.env  ---
-CPU_LOW="${CPU_LOW:-30}"
-CPU_HIGH="${CPU_HIGH:-80}"
-CPU_WARN="${CPU_WARN:-70}"
+# --- Default Thresholds if not found in proxy.env  ---
+CPU_LOW="${CPU_LOW:-0}"
+CPU_HIGH="${CPU_HIGH:-45}"
+CPU_WARN="${CPU_WARN:-40}"
 HASH_LOW_5M="${HASH_LOW_5M:-8000}"
 HASH_LOW_30M="${HASH_LOW_30M:-10000}"
 LED_BRT="${LED_BRT:-50}"
+MINERS_TOT="${MINERS_TOT:-0}"
+MINERS_IPS="${MINERS_IPS:-}"
+
 
 printf '%s Using thresholds: CPU_LOW=%s CPU_WARN=%s CPU_HIGH=%s HASH_LOW_5M=%s HASH_LOW_30M=%s\n' \
   "$(date '+%F %T')" "$CPU_LOW" "$CPU_WARN" "$CPU_HIGH" "$HASH_LOW_5M" "$HASH_LOW_30M" >>"$LOG"
@@ -142,24 +139,39 @@ CoolSecs=0
 LowHash5Secs=0
 LowHash30Secs=0
 CPUHighSec=0
+LowMinersSec=0
 reboot_defer=0
-StartupEPOCH=$(date +%s) 
-Last1hrEPOCH=$StartupEPOCH 
-StartupEmailSent=0
-DNSGood=1             # pings google every hour to show internet is working
-LastLoop24hr=""
+StartupEPOCH=$(date +%s)        
+StartupEmailSent=0      
+DNSGood=1             # pings google every 24 hours to show internet is working
+LastMidnightRun=""    # Tracks the last date we ran the midnight function
 LEDStatus=""          # Shows LED status to other scripts by writing to a file
 LED_TTY_PATH=""       # Port Location of the LED
 
 # For change detection
 LastHR=0
 LastTC=0
-LastWT=0
+LastWK=0
 LastCoolSecs=0
 LastLow5Secs=0
 LastLow30Secs=0
 LastCPUHighSec=0
+LastLowMinersSec=0
 LastLoggedHour=""
+
+# Current proxy metrics
+HR=0                  # Hashrate in H/s
+TC=0                  # CPU temperature in °C
+WT=0                  # CPU Power
+WK=0                  # Number of workers / miners
+LS=""                 # LED Status
+
+# Global declarations for average hash rate
+declare -g -a HashArray=()           # the array (dynamic/sparse)
+declare -g HashArrayPos=-1           # -1 = empty, then cycles 0..359
+declare -g HashArrayLen=0            # 0..360 (number of valid elements)
+declare -g HashAverage=0             # current average
+
 
 HOSTNAME_STR="$(hostname)"
 EMAIL_LIB="/usr/local/bin/send_email.sh"
@@ -176,7 +188,6 @@ log() { printf '%s %s\n' "$(ts)" "$*" >>"$LOG"; }
 
 # Capture all stderr from the script into the log
 exec 2>>"$LOG"
-
 
 
 check_dependencies() {
@@ -199,8 +210,8 @@ check_dependencies() {
 
 
 
-
 # --- Reboot email diagnostics (network/session snapshots) ---
+
 diag_block() {
   local label="$1"; shift
   printf '\n\n========== %s ==========\n\n' "$label"   # two newlines: one after header, one blank line
@@ -304,199 +315,192 @@ collect_reboot_diags() {
 
   out+=$'\n'
 
+  # Traceroute to each pool
+  local p host tr_pool
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
 
-
-
-
-
-  if [ -n "${DIAG_POOLS:+x}" ]; then  #check if using a local xmrig proxy
-
-
-    # Traceroute to each pool
-    local p host tr_pool
-    for p in $DIAG_POOLS; do
-      host="${p%%:*}"
-      port="${p##*:}"
-
-      # Run traceroute ONCE, capture all output; don't leak to top of email
-      if tr_pool="$(traceroute -n -w 2 -q 2 "$host" 2>&1)"; then
-        :
-      else
-        tr_pool="traceroute failed (host: $host)"
-      fi
-
-      out+="$(format_traceroute "Path to mining pool ($host) – checks route to pool server" "$tr_pool")"
-      out+=$'\n'
-    done
-
-
-    out+=$(diag_block "DNS servers this device is using – wrong ones can prevent pool names from resolving" \
-      bash -lc 'cat /etc/resolv.conf || systemd-resolve --status 2>/dev/null || true')
-
-    out+=$'\n\n\n========== Port reachability to each mining pool (secure mining port – Open = good) ==========\n'
-    for p in $DIAG_POOLS; do
-      host="${p%%:*}"
-      port="${p##*:}"
-      out+=$'\n'"Pool hostname: $host:$port"
-      timeout 5 bash -c "echo > /dev/tcp/$host/$port" >/dev/null 2>&1 \
-        && out+="   :   Open (connection succeeded)"$'\n' \
-        || out+="   :   Blocked or timeout"$'\n'
-    done
-
-
-
-    # Extra detail to help distinguish DNS issues, IPv6 issues, and TLS/443 blocking
-    out+=$'\n\n========== Extra connectivity details for each mining pool (DNS + TLS probe) ==========\n'
-    for p in $DIAG_POOLS; do
-      host="${p%%:*}"
-      port="${p##*:}"
-
-      out+=$'\n'"Pool hostname: $host:$port"$'\n'
-
-      # --- DNS resolution details (both IPv4 and IPv6 if present) ---
-      local ahosts
-      ahosts="$(getent ahosts "$host" 2>/dev/null || true)"
-      if [ -n "$ahosts" ]; then
-        out+="Resolved addresses via getent ahosts:"$'\n'
-        out+="$ahosts"$'\n'
-      else
-        out+="Resolved addresses via getent ahosts: (none – DNS lookup failed)"$'\n'
-      fi
-
-      # --- Simple IPv4-only extraction (helps catch “IPv6 works, IPv4 blocked” cases) ---
-      local ipv4_list
-      ipv4_list="$(printf '%s\n' "$ahosts" | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1}' || true)"
-      if [ -n "$ipv4_list" ]; then
-        out+="IPv4 addresses used for testing:"$'\n'
-        out+="$ipv4_list"$'\n'
-      else
-        out+="IPv4 addresses used for testing: (none – hostname may be IPv6-only)"$'\n'
-      fi
-
-      # --- TLS / HTTPS probe with curl (only if curl is installed) ---
-      if command -v curl >/dev/null 2>&1; then
-        local curl_out
-        # We only keep the first ~12 lines so the email doesn't explode
-        curl_out="$(
-          curl -v --connect-timeout 5 --max-time 5 "https://$host:$port" </dev/null 2>&1 \
-            | sed -n '1,12p' \
-            || true
-        )"
-        if [ -n "$curl_out" ]; then
-          out+="curl -v TLS probe (first lines):"$'\n'"$curl_out"$'\n'
-        else
-          out+="curl -v TLS probe: (no output – likely hard timeout)"$'\n'
-        fi
-      else
-        out+="curl not installed – skipping TLS probe on $host:$port"$'\n'
-      fi
-    done
-
-
-    # Extra per-IP port test so we can see which Hashvault backend is failing
-    out+=$'\n\n========== Per-IP port reachability for each mining pool (helps debug Hashvault) ==========\n'
-    for p in $DIAG_POOLS; do
-      host="${p%%:*}"
-      port="${p##*:}"
-
-      out+=$'\n'"Pool hostname: $host:$port"$'\n'
-
-      # Get unique IPv4 addresses for this host
-      local ahosts ipv4_list ip any_ok
-      ahosts="$(getent ahosts "$host" 2>/dev/null || true)"
-      ipv4_list="$(printf '%s\n' "$ahosts" \
-                    | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1}' \
-                    | sort -u)"
-
-      if [ -z "$ipv4_list" ]; then
-        out+="   (No IPv4 addresses found – DNS failure or IPv6-only host)\n"
-        continue
-      fi
-
-      any_ok=0
-      for ip in $ipv4_list; do
-        if timeout 5 bash -lc "echo > /dev/tcp/$ip/$port" >/dev/null 2>&1; then
-          out+="   [$ip] : Open (TCP handshake succeeded)\n"
-          any_ok=1
-        else
-          out+="   [$ip] : Blocked or timeout\n"
-        fi
-      done
-
-      if (( any_ok == 1 )); then
-        out+="   Overall: at least one backend reachable\n"
-      else
-        out+="   Overall: ALL backends failed – this really looks blocked\n"
-      fi
-    done
-
-
-
-
-
-
-
-
-
-
-    out+=$'\n\n========== ICMP ping reachability to each mining pool (5 packets) – checks basic IP-level reachability ==========\n\n'
-    out+="Note: Many mining pools block or ignore pings – FAIL here is often normal and does NOT mean mining won't work.\n"
-    firstline=true
-    for p in $DIAG_POOLS; do
-      host="${p%%:*}"
-      port="${p##*:}"
-      out+="\n\nPool hostname: $host:$port"
-      out+=$'\n'
-      if "$firstline"; then
-        firstline=false
-        out+=$'\n'
-      fi
-      # getent may fail; don't let that kill the loop
-      local ip="$(getent ahosts "$host" 2>/dev/null | awk '/^[0-9.]/{print $1; exit}' || true)"
-      if [ -n "$ip" ]; then
-        local ping_result="$(ping -c 5 -W 1 "$ip" 2>&1 || true)"
-        out+="$ping_result"$'\n'
-        if grep -q "100% packet loss" <<<"$ping_result"; then
-          out+="Result: FAIL (100% loss)"$'\n'
-        else
-          local loss="$(grep "packet loss" <<<"$ping_result" | awk '{print $(NF-4)}' | tr -d '%')"
-          local avg="$(grep "rtt min/avg/max" <<<"$ping_result" | awk -F'/' '{print $5}')"
-          out+="Result: OK (${loss}% loss, avg RTT ${avg:-unknown} ms)"$'\n'
-        fi
-      else
-        out+="Could not resolve to IPv4 address – skipping ping."$'\n'
-      fi
-    done
-
-
-    out+=$(diag_block "Currently active secure (TLS) connections to port 443 – mining pools usually use this" \
-      bash -lc "ss -tnip '( dport = :443 )' | tail -n +2 | sed 's/^/ /'" || true)
-
-    if [ -n "${DIAG_POOLS:-}" ]; then
-      out+=$'\n\n'
-      out+=$'\n========== Raw ss output for each mining pool (advanced detail) =========\n\n'
-      for p in $DIAG_POOLS; do
-        host="${p%%:*}"
-        port="${p##*:}"
-        out+="Pool hostname: $host:$port\n"
-        local ip="$(getent ahosts "$host" 2>&1 | awk 'NR==1{print $1}' || true)"
-        if [ -n "$ip" ]; then
-          out+="Resolved IP: $ip\n\n"
-          local conn="$(ss -tnpi "dst $ip:$port" 2>&1 || true)"
-          if [[ -n "$conn" && "$conn" != *"No such file"* ]]; then
-            out+="$conn\n\n"                  # ss output with its own header + blank line after
-          else
-            out+="No active connections right now.\n\n"
-          fi
-        else
-          out+="Could not resolve hostname.\n\n"
-        fi
-      done
+    # Run traceroute ONCE, capture all output; don't leak to top of email
+    if tr_pool="$(traceroute -n -w 2 -q 2 "$host" 2>&1)"; then
+      :
+    else
+      tr_pool="traceroute failed (host: $host)"
     fi
 
-  fi    #check if using a local xmrig proxy
+    out+="$(format_traceroute "Path to mining pool ($host) – checks route to pool server" "$tr_pool")"
+    out+=$'\n'
+  done
 
 
+  out+=$(diag_block "DNS servers this device is using – wrong ones can prevent pool names from resolving" \
+    bash -lc 'cat /etc/resolv.conf || systemd-resolve --status 2>/dev/null || true')
+
+  out+=$'\n\n\n========== Port reachability to each mining pool (secure mining port – Open = good) ==========\n'
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
+    out+=$'\n'"Pool hostname: $host:$port"
+    timeout 5 bash -c "echo > /dev/tcp/$host/$port" >/dev/null 2>&1 \
+      && out+="   :   Open (connection succeeded)"$'\n' \
+      || out+="   :   Blocked or timeout"$'\n'
+  done
+
+
+
+
+
+  # Extra detail to help distinguish DNS issues, IPv6 issues, and TLS/443 blocking
+  out+=$'\n\n========== Extra connectivity details for each mining pool (DNS + TLS probe) ==========\n'
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
+
+    out+=$'\n'"Pool hostname: $host:$port"$'\n'
+
+    # --- DNS resolution details (both IPv4 and IPv6 if present) ---
+    local ahosts
+    ahosts="$(getent ahosts "$host" 2>/dev/null || true)"
+    if [ -n "$ahosts" ]; then
+      out+="Resolved addresses via getent ahosts:"$'\n'
+      out+="$ahosts"$'\n'
+    else
+      out+="Resolved addresses via getent ahosts: (none – DNS lookup failed)"$'\n'
+    fi
+
+    # --- Simple IPv4-only extraction (helps catch “IPv6 works, IPv4 blocked” cases) ---
+    local ipv4_list
+    ipv4_list="$(printf '%s\n' "$ahosts" | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1}' || true)"
+    if [ -n "$ipv4_list" ]; then
+      out+="IPv4 addresses used for testing:"$'\n'
+      out+="$ipv4_list"$'\n'
+    else
+      out+="IPv4 addresses used for testing: (none – hostname may be IPv6-only)"$'\n'
+    fi
+
+    # --- TLS / HTTPS probe with curl (only if curl is installed) ---
+    if command -v curl >/dev/null 2>&1; then
+      local curl_out
+      # We only keep the first ~12 lines so the email doesn't explode
+      curl_out="$(
+        curl -v --connect-timeout 5 --max-time 5 "https://$host:$port" </dev/null 2>&1 \
+          | sed -n '1,12p' \
+          || true
+      )"
+      if [ -n "$curl_out" ]; then
+        out+="curl -v TLS probe (first lines):"$'\n'"$curl_out"$'\n'
+      else
+        out+="curl -v TLS probe: (no output – likely hard timeout)"$'\n'
+      fi
+    else
+      out+="curl not installed – skipping TLS probe on $host:$port"$'\n'
+    fi
+  done
+
+
+
+  # Extra per-IP port test so we can see which Hashvault backend is failing
+  out+=$'\n\n========== Per-IP port reachability for each mining pool (helps debug Hashvault) ==========\n'
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
+
+    out+=$'\n'"Pool hostname: $host:$port"$'\n'
+
+    # Get unique IPv4 addresses for this host
+    local ahosts ipv4_list ip any_ok
+    ahosts="$(getent ahosts "$host" 2>/dev/null || true)"
+    ipv4_list="$(printf '%s\n' "$ahosts" \
+                  | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1}' \
+                  | sort -u)"
+
+    if [ -z "$ipv4_list" ]; then
+      out+="   (No IPv4 addresses found – DNS failure or IPv6-only host)\n"
+      continue
+    fi
+
+    any_ok=0
+    for ip in $ipv4_list; do
+      if timeout 5 bash -lc "echo > /dev/tcp/$ip/$port" >/dev/null 2>&1; then
+        out+="   [$ip] : Open (TCP handshake succeeded)\n"
+        any_ok=1
+      else
+        out+="   [$ip] : Blocked or timeout\n"
+      fi
+    done
+
+    if (( any_ok == 1 )); then
+      out+="   Overall: at least one backend reachable\n"
+    else
+      out+="   Overall: ALL backends failed – this really looks blocked\n"
+    fi
+  done
+
+
+
+
+
+
+
+
+
+
+
+
+  out+=$'\n\n========== ICMP ping reachability to each mining pool (5 packets) – checks basic IP-level reachability ==========\n\n'
+  out+="Note: Many mining pools block or ignore pings – FAIL here is often normal and does NOT mean mining won't work.\n"
+  firstline=true
+  for p in $DIAG_POOLS; do
+    host="${p%%:*}"
+    port="${p##*:}"
+    out+="\n\nPool hostname: $host:$port"
+    out+=$'\n'
+    if "$firstline"; then
+      firstline=false
+      out+=$'\n'
+    fi
+    # getent may fail; don't let that kill the loop
+    local ip="$(getent ahosts "$host" 2>/dev/null | awk '/^[0-9.]/{print $1; exit}' || true)"
+    if [ -n "$ip" ]; then
+      local ping_result="$(ping -c 5 -W 1 "$ip" 2>&1 || true)"
+      out+="$ping_result"$'\n'
+      if grep -q "100% packet loss" <<<"$ping_result"; then
+        out+="Result: FAIL (100% loss)"$'\n'
+      else
+        local loss="$(grep "packet loss" <<<"$ping_result" | awk '{print $(NF-4)}' | tr -d '%')"
+        local avg="$(grep "rtt min/avg/max" <<<"$ping_result" | awk -F'/' '{print $5}')"
+        out+="Result: OK (${loss}% loss, avg RTT ${avg:-unknown} ms)"$'\n'
+      fi
+    else
+      out+="Could not resolve to IPv4 address – skipping ping."$'\n'
+    fi
+  done
+
+
+  out+=$(diag_block "Currently active secure (TLS) connections to port 443 – mining pools usually use this" \
+    bash -lc "ss -tnip '( dport = :443 )' | tail -n +2 | sed 's/^/ /'" || true)
+
+  if [ -n "${DIAG_POOLS:-}" ]; then
+    out+=$'\n\n'
+    out+=$'\n========== Raw ss output for each mining pool (advanced detail) =========\n\n'
+    for p in $DIAG_POOLS; do
+      host="${p%%:*}"
+      port="${p##*:}"
+      out+="Pool hostname: $host:$port\n"
+      local ip="$(getent ahosts "$host" 2>&1 | awk 'NR==1{print $1}' || true)"
+      if [ -n "$ip" ]; then
+        out+="Resolved IP: $ip\n\n"
+        local conn="$(ss -tnpi "dst $ip:$port" 2>&1 || true)"
+        if [[ -n "$conn" && "$conn" != *"No such file"* ]]; then
+          out+="$conn\n\n"                  # ss output with its own header + blank line after
+        else
+          out+="No active connections right now.\n\n"
+        fi
+      else
+        out+="Could not resolve hostname.\n\n"
+      fi
+    done
+  fi
 
 
   out+=$(diag_block "MTU test to internet – fragmentation issues can cause mining dropouts" \
@@ -516,17 +520,89 @@ collect_reboot_diags() {
 
 
 
+calc_average_hash() {     # Function: add new hash rate and recalculate average
+    local new_hash="$1"
+    local sum=0
+    local i
+
+    HashArrayPos=$(( (HashArrayPos + 1) % 360 ))  # Advance position (circular wrap-around)
+    HashArray[HashArrayPos]="$new_hash"           # Store the new value (overwrites old one when full)
+    if (( HashArrayLen < 360 )); then HashArrayLen=$(( HashArrayLen + 1 )); fi
+
+    sum=0      # Calculate current sum of all valid elements
+    for ((i = 0; i < HashArrayLen; i++)); do
+        # Use :-0 to treat empty/unset array slots as 0
+        (( sum += ${HashArray[i]:-0} ))
+    done
+
+    HashAverage=$(( sum / HashArrayLen ))
+}
+
+
+
+collect_show_miners() {
+  local log_file="/var/log/xmrig-proxy.log"
+  local output=""
+  local i=1
+  local ip
+  local log_lines=""
+
+  if [ -z "$MINERS_IPS" ]; then
+    echo "No IP addresses have been added to proxy.env MINERS_IPS"
+    return 0
+  fi
+
+  if [ ! -f "$log_file" ]; then
+    echo "Could not find xmrig-proxy.log"
+    return 0
+  fi
+
+  # Get ONLY last 3 minutes of log lines (xmrig-proxy.log format: [YYYY-MM-DD HH:MM:SS.mmm] ...)
+  since_ts="$(date -d '3 minutes ago' '+%F %T')"
+
+  log_lines="$(
+    awk -v since="$since_ts" '
+      {
+        # $1 is like "[2026-01-09"
+        # $2 is like "15:16:48.721]"
+        d=$1; t=$2
+        gsub(/^\[/,"",d)
+        gsub(/\]$/,"",t)
+        sub(/\..*/,"",t)          # drop .mmm so we compare to "HH:MM:SS"
+        if (d" "t >= since) print
+      }
+    ' "$log_file" 2>/dev/null
+  )"
+
+  for ip in $MINERS_IPS; do
+    if ! grep -q -- "$ip" <<< "$log_lines"; then
+      output+="Miner$i $ip OFF LINE"$'\n'
+    else
+      if get_metrics "$ip"; then
+        output+="Miner$i $ip Working ($HR H/s, $TC C, $WT W, LED $LS)"$'\n'
+      else
+        output+="Miner$i $ip Working (no stats)"$'\n'
+      fi
+    fi
+    ((i++))
+  done
+
+  printf '%s\n' "$output"
+}
+
+
+
 uptime_text() {
   local uptime_str="Unknown"
 
-  if ! systemctl is-active --quiet xmrig 2>/dev/null; then
+  if ! systemctl is-active --quiet xmrig-proxy 2>/dev/null; then
     printf '%s' "$uptime_str"
     return 0
   fi
 
   local start_time start_sec now_sec seconds
 
-  start_time="$(systemctl show xmrig --property=ActiveEnterTimestamp --value 2>/dev/null || true)"
+  start_time="$(systemctl show xmrig-proxy --property=ActiveEnterTimestamp --value 2>/dev/null || true)"
   [[ -z "$start_time" ]] && { printf '%s' "$uptime_str"; return 0; }
 
   now_sec="$(date +%s)"
@@ -560,92 +636,73 @@ uptime_text() {
 
 
 
-
 send_status_email() {
   local subject="$1"
 
-  # Refresh metrics right before emailing/rebooting
-  get_metrics || true
+  # Refresh current metrics (safe even if get_metrics fails)
+  get_metrics "127.0.0.1" || true
 
-  # SAFE: XMRig log — start at the *last* "Started xmrig" line,
-  # then take the last 200 lines of that block.
-  XMRIG_LOG=$(
-    journalctl -u xmrig -n 1000 --no-pager -o cat 2>/dev/null \
-      | awk '
-          /Started xmrig/ {buf=""}      # reset buffer on each start
-          {buf = buf $0 ORS}            # keep appending lines
-          END {printf "%s", buf}        # print only lines after last start
-        ' 2>/dev/null \
-      | tail -200 2>/dev/null || true
+  # Capture logs
+  local XMRIG_PROXY_LOG=""
+  XMRIG_PROXY_LOG=$(
+    journalctl -u xmrig-proxy -n 1000 --no-pager -o cat 2>/dev/null \
+      | awk '/Started xmrig-proxy/ {buf=""} {buf = buf $0 ORS} END {printf "%s", buf}' \
+      | tail -500 \
+      || echo "(Failed to capture recent xmrig-proxy log)"
   )
-  XMRIG_LOG=$(echo "$XMRIG_LOG" | sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g")
+  XMRIG_PROXY_LOG=$(echo "$XMRIG_PROXY_LOG" | sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g")
 
-
-  # Fallback if nothing was captured above
-  if [ -z "$XMRIG_LOG" ]; then
-    XMRIG_LOG=$(
-      journalctl -u xmrig -n 200 --no-pager -o cat 2>/dev/null \
-        || echo "(No XMRig log data found)"
-    )
-    XMRIG_LOG=$(echo "$XMRIG_LOG" | sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g")
+  if [ -z "$XMRIG_PROXY_LOG" ]; then
+    XMRIG_PROXY_LOG="(No recent XMRig-Proxy log data)"
   fi
 
-  # SAFE: last 100 lines of ras-mc-ctl --errors (ignore failures)
-  MCE_LOG_TAIL=$(
-    ras-mc-ctl --errors 2>/dev/null \
-      | tail -n 100 2>/dev/null || true
-  )
-  if [ -z "${MCE_LOG_TAIL:-}" ]; then
-    MCE_LOG_TAIL="(No output from 'ras-mc-ctl --errors' or rasdaemon not active.)"
-  fi
+  local MCE_LOG_TAIL=""
+  MCE_LOG_TAIL=$(ras-mc-ctl --errors 2>/dev/null | tail -n 100 || echo "(No output from ras-mc-ctl --errors - install rasdaemon if desired)")
 
-  WATCHDOG_TAIL=$(
-    tail -n 100 "$LOG" 2>/dev/null \
-      || echo "(No miner-watchdog.log data found at $LOG)"
-  )
+  local WATCHDOG_TAIL=""
+  WATCHDOG_TAIL=$(tail -n 100 "$LOG" 2>/dev/null || echo "(No proxy-watchdog.log data)")
 
+  local SHOW_MINERS=""
+  SHOW_MINERS="$(collect_show_miners 2>&1 || echo "(collect_SHOW_MINERS failed)")"
 
-  # Network/session diagnostics (snapshot)
-  REBOOT_DIAGS="$(collect_reboot_diags 2>&1 || echo "(collect_reboot_diags failed)")"
+  local REBOOT_DIAGS=""
+  REBOOT_DIAGS="$(collect_reboot_diags 2>&1 || echo "(collect_REBOOT_DIAGS failed)")"
 
-  # SAFE: email failure is non-fatal
   send_email "$subject" "\
 Host: $HOSTNAME_STR
 Started: $(ts)
-Hashrate: $HR H/s
+Hashrate: $HR H/s     Avg: $HashAverage H/s
 CPU Temp: $TC C
-Power: $WT W
+Workers: $WK
 Uptime: $(uptime_text)
 Watchdog active.
 
+==============================
+  proxy.env/MINERS_IPS Miners
+==============================
+$SHOW_MINERS
 
 ==============================
      NETWORK DIAGNOSTICS
 ==============================
-${REBOOT_DIAGS}
-
+$REBOOT_DIAGS
 
 ==========================================
  Last 100 lines of ras-mc-ctl --errors
 ==========================================
 $MCE_LOG_TAIL
 
-
 ======================================
- Last 100 lines of miner-watchdog.log
+ Last 100 lines of proxy-watchdog.log
 ======================================
 $WATCHDOG_TAIL
 
-
-==============================
- Last 200 lines of xmrig.log
-==============================
-$XMRIG_LOG
-" || log "WARN: 5-min send_email failed (non-fatal)"
+=================================
+Last 500 lines of xmrig-proxy.log
+=================================
+$XMRIG_PROXY_LOG
+" || log "WARN: send_email failed (non-fatal)"
 }
-
-
-
 
 
 
@@ -653,9 +710,9 @@ exit_trap() {
   local st=$?
   local hr=${HR:-N/A}
   local tc=${TC:-N/A}
-  local wt=${WT:-N/A}
-  log "WATCHDOG EXITED: status=$st (signal or error), last HR=$hr Temp=$tc Watts=$wt \
-cool=${CoolSecs:-0}s hot=${CPUHighSec:-0}s low5=${LowHash5Secs:-0}s low30=${LowHash30Secs:-0}s"
+  local wk=${WK:-N/A}
+  log "WATCHDOG EXITED: status=$st (signal or error), last HR=$hr Temp=$tc Workers=$wk \
+cool=${CoolSecs:-0}s hot=${CPUHighSec:-0}s low5=${LowHash5Secs:-0}s low30=${LowHash30Secs:-0}s lowMiners=${LowMinersSec:-0}s"
 }
 
 err_trap() {
@@ -682,33 +739,53 @@ last_reboot_epoch() {
 
 # --- Miner query ---
 get_metrics() {
-  local json
-  json=$(timeout 6 printf '%s\r\n' "$PASSWORD" | nc -w 4 "$MINER_HOST" "$MINER_PORT" 2>>"$LOG" || true)
+  local ip="${1:-127.0.0.1}"   # Use provided IP or default to localhost
 
+  local json
+
+  # Query the proxy status server
+  json=$(timeout 6 printf '%s\r\n' "$STATUS_TOKEN" | nc -w 2 "$ip" "$STATUS_PORT" 2>>"$LOG" || true)
+
+  # If no response or error in JSON, reset to safe defaults
   if [[ -z "$json" || "$json" == *"error"* ]]; then
-    HR=0; TC=0; WT=0
+    HR=0
+    TC=0
+    WT=0
+    WK=0
+    LS="unknown"                  
     return 1
   fi
-  HR=$(echo "$json" | jq -r '.hashrate // 0' 2>/dev/null || echo 0)
-  TC=$(echo "$json" | jq -r '.temp // 0'     2>/dev/null || echo 0)
-  WT=$(echo "$json" | jq -r '.watts // 0'    2>/dev/null || echo 0)
 
-  # Ensure valid integers
+  # Extract metrics directly into global variables
+  HR=$(printf '%s' "$json" | jq -r '.hashrate // 0' 2>/dev/null)
+  TC=$(printf '%s' "$json" | jq -r '.temp // 0' 2>/dev/null)
+  WT=$(printf '%s' "$json" | jq -r '.watts // 0' 2>/dev/null)
+  WK=$(printf '%s' "$json" | jq -r '.workers // 0' 2>/dev/null)
+  LS=$(printf '%s' "$json" | jq -r '.led // "off"' 2>/dev/null)
+
+  # Force to "off" if not a valid value (prevents bad state in script)
+  if [[ ! "$LS" =~ ^(off|red|green)$ ]]; then
+    LS="unknown"
+  fi
+
+  # Ensure metrics are valid integers
   [[ "$HR" =~ ^[0-9]+$ ]] || HR=0
   [[ "$TC" =~ ^[0-9]+$ ]] || TC=0
   [[ "$WT" =~ ^[0-9]+$ ]] || WT=0
+  [[ "$WK" =~ ^[0-9]+$ ]] || WK=0
 }
+
+
 
 # --- Safe reboot ---
 do_reboot() {
-  local reason="$1"
-  log "REBOOT triggered: $reason"
-  send_status_email "$HOSTNAME_STR Miner Reboot $reason"
+  local REASON="$1"
+  log "REBOOT triggered: $REASON"
+  send_status_email "$HOSTNAME_STR Proxy Reboot $REASON"
   set_led 0 0 0 || true  #turn off led
   sleep 10
   /sbin/reboot
 }
-
 
 
 init_led() {
@@ -733,6 +810,7 @@ init_led() {
   LED_TTY_PATH=""
   return 1
 }
+
 
 set_led() {
   local r="$1" g="$2" b="$3"
@@ -782,18 +860,6 @@ internet_check() {
   fi
 }
 
-loop24hr() {
-  local now_date=$(date '+%Y-%m-%d')
-  local now_time=$(date '+%H:%M')
-  [[ "$now_date" == "$LastLoop24hr" || "$now_time" > "00:09" ]] && return 0
-  LastLoop24hr="$now_date"
-  log "loop24hr running..."
-
-  # ===== Midnight code goes here =====
-
-  internet_check   
-
-}
 
 
 
@@ -804,15 +870,18 @@ check_dependencies   # show any missing dependencies in the log
 init_led || log "LED init failed (fit-statUSB not found)"
 
 set_led 0 0 0 || true  #turn off led
-log "Starting miner watchdog..."
+log "Starting proxy watchdog..."
 
 # --- Main loop ---
 while true; do
-  get_metrics || true
+
+  get_metrics "127.0.0.1" || true
 
   now=$(date +%s)
 
-  last_reboot_ts=$(last_reboot_epoch)
+  if (( now - StartupEPOCH >= 240 )); then calc_average_hash "$HR"; fi  # calculate 1 hour average
+
+  last_reboot_ts=$(last_reboot_epoch)   #only reboot once per hour max
   if (( last_reboot_ts > 0 && now - last_reboot_ts < REBOOT_GUARD_SEC )); then
     reboot_defer=1
   else
@@ -822,6 +891,7 @@ while true; do
   # ===== Counters =====
   (( TC < CPU_LOW )) && ((CoolSecs+=LOOP_INTERVAL)) || CoolSecs=0
   (( TC > CPU_HIGH )) && ((CPUHighSec+=LOOP_INTERVAL)) || CPUHighSec=0
+  (( WK < MINERS_TOT )) && ((LowMinersSec+=LOOP_INTERVAL)) || LowMinersSec=0
   (( HR < HASH_LOW_5M )) && ((LowHash5Secs+=LOOP_INTERVAL)) || LowHash5Secs=0
   (( HR < HASH_LOW_30M )) && ((LowHash30Secs+=LOOP_INTERVAL)) || LowHash30Secs=0
 
@@ -847,44 +917,48 @@ while true; do
   current_hour=$(date +%H)
   log_needed=false
   diff_hr=$(( HR>LastHR ? HR-LastHR : LastHR-HR ))
-  diff_wt=$(( WT>LastWT ? WT-LastWT : LastWT-WT ))
   diff_tc=$(( TC>LastTC ? TC-LastTC : LastTC-TC ))
 
   if (( LastHR == 0 || (diff_hr * 100 / (LastHR + 1)) >= 10 )); then log_needed=true; fi
-  if (( LastWT == 0 || (diff_wt * 100 / (LastWT + 1)) >= 10 )); then log_needed=true; fi
   if (( LastTC == 0 || diff_tc >= 3 )); then log_needed=true; fi
+  if [[ "$LastWK" != "$WK" ]]; then log_needed=true; fi
 
-  # Log only if any counter increased by 60+ seconds since last log
-  if (( CoolSecs - LastCoolSecs >= 60 || LowHash5Secs - LastLow5Secs >= 60 || LowHash30Secs - LastLow30Secs >= 60 || CPUHighSec - LastCPUHighSec >= 60 )); then
+  if (( CoolSecs - LastCoolSecs >= 60 || LowHash5Secs - LastLow5Secs >= 60 || LowHash30Secs - LastLow30Secs >= 60 || CPUHighSec - LastCPUHighSec >= 60 || LowMinersSec - LastLowMinersSec >= 60 )); then
     log_needed=true
   fi
-
   if [[ "$current_hour" != "$LastLoggedHour" ]]; then
     log_needed=true; LastLoggedHour="$current_hour"
   fi
-
   if $log_needed; then
-    log "HR=$HR Temp=${TC}°C Watts=${WT} | cool=${CoolSecs}s, hot=${CPUHighSec}s, low5=${LowHash5Secs}s, low30=${LowHash30Secs}s"
-    LastHR=$HR; LastTC=$TC; LastWT=$WT
-    LastCoolSecs=$CoolSecs; LastLow5Secs=$LowHash5Secs; LastLow30Secs=$LowHash30Secs; LastCPUHighSec=$CPUHighSec
+    log "HR=$HR Temp=${TC}°C Workers=${WK} | cool=${CoolSecs}s, hot=${CPUHighSec}s, low5=${LowHash5Secs}s, low30=${LowHash30Secs}s, lowMiners=${LowMinersSec}s"
+    LastHR=$HR; LastTC=$TC; LastWK=$WK
+    LastCoolSecs=$CoolSecs; LastLow5Secs=$LowHash5Secs; LastLow30Secs=$LowHash30Secs; LastCPUHighSec=$CPUHighSec; LastLowMinersSec=$LowMinersSec
   fi
 
+
   # ================= Send 5 minute email =================
-  if (( StartupEmailSent == 0 )); then
+  if (( StartupEmailSent == 0 )); then  
     if (( $(date +%s) - StartupEPOCH >= 300 )); then  
-      internet_check
-      send_status_email "$HOSTNAME_STR XMRig Running (5 min)"
+      internet_check  
+      send_status_email "$HOSTNAME_STR XMRig-Proxy Running (5 min)"
       StartupEmailSent=1
     fi
   fi
-  
-  # ================= Run once per Hour =================
-  if (( now - Last1hrEPOCH >= 3600 )); then   
-    Last1hrEPOCH=$now
-    internet_check
+
+  # ================= Send the daily midnight email =================
+  current_date=$(date '+%Y-%m-%d')
+  if [[ "$current_date" != "$LastMidnightRun" ]] && [[ "$(date '+%H:%M')" < "00:10" ]]; then
+    internet_check  
+    send_status_email "$HOSTNAME_STR XMRig-Proxy $WK Miners Running"
+    LastMidnightRun="$current_date"
   fi
 
-  loop24hr # runs at midnight to handle maintenace functions
+  # ================= Send missing miners email once =================
+  if (( LowMinersSec > 1800 && LowMinersSec <= 1860 )); then
+    send_status_email "$HOSTNAME_STR XMRig-Proxy $WK Miners Running"
+    ((LowMinersSec += 120))
+  fi
+
 
   # ==== Perfectly synchronized LED pulse to 10 second intervals ====
   now_sec=$(date +%s)
@@ -914,7 +988,7 @@ while true; do
   sleep "${sleep_sec}.${sleep_ms}" 2>/dev/null || sleep "$sleep_sec"  # works on any modern sleep
 
   # ===== LED control (silent, synchronized across miners) =====
-  if (( TC > CPU_HIGH || CoolSecs > 0 || LowHash5Secs > 0 || LowHash30Secs > 0 || CPUHighSec > 0 || DNSGood == 0 )); then
+  if (( TC > CPU_HIGH || CoolSecs > 0 || LowHash5Secs > 0 || LowHash30Secs > 0 || CPUHighSec > 0 || LowMinersSec > 0 || DNSGood == 0 )); then
     set_led 0 0 0 || true                      # turn off led (error/trigger states)
     save_LED "off"
   elif (( TC > CPU_WARN )); then
@@ -931,42 +1005,9 @@ Ctrl-O, Enter, Ctrl-X
 
 
 
-Command:   sudo chmod +x /usr/local/bin/miner-watchdog.sh
-
-
-Run Manually to Test:    sudo bash -x /usr/local/bin/miner-watchdog.sh
-Stop the Test: Ctrl-C
-
-
-
-
-
-Command:   sudo nano /etc/systemd/system/miner-watchdog.service
-#########################################################
-[Unit]
-Description=Miner Watchdog (auto-reboot monitor)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-ExecStart=/usr/local/bin/miner-watchdog.sh
-Restart=always
-RestartSec=10
-StandardOutput=append:/var/log/miner-watchdog.log
-StandardError=append:/var/log/miner-watchdog.log
-
-[Install]
-WantedBy=multi-user.target
-#########################################################
-Ctrl-O, Enter, Ctrl-X
-
-
-
 Command:   sudo systemctl daemon-reload
-Command:   sudo systemctl enable miner-watchdog.service
-Command:   sudo systemctl start miner-watchdog.service
+Command:   sudo systemctl enable proxy-watchdog.service
+Command:   sudo systemctl start proxy-watchdog.service
 
 
 Command:   sudo reboot  (you can reboot later)

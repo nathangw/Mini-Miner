@@ -1,0 +1,254 @@
+
+
+
+Edit this file on your PC
+
+
+
+
+Command:   sudo nano /etc/network/interfaces
+#########################################################
+# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+
+source /etc/network/interfaces.d/*
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+# === PRIMARY: Ethernet (Static IP) ===
+auto enp1s0
+iface enp1s0 inet static
+    address 192.168.1.30
+    netmask 255.255.255.0
+    gateway 192.168.1.1
+    dns-nameservers 1.1.1.1 8.8.8.8
+#########################################################
+Ctrl-O,  Enter,  Ctrl-X
+
+
+
+
+
+
+
+
+
+Use this file on the Miners ONLY.   
+
+Notice there are no pools because the xmrig-proxy machine determines what pools to use.
+
+Command:  sudo nano /etc/miner.env
+#########################################################
+#Your email where to send reports to
+EMAIL_TO="Your_Email_In_Quotes"
+
+#=== WATCHDOG THRESHOLDS (used by miner-watchdog.sh) ==
+#Low temperature in C to show that the CPU is idle and not mining
+CPU_LOW=30
+
+#Temperature to restart the miner and send an email   (3950=90  7945=80)
+CPU_HIGH=80
+
+#Temperature to change the LED to red   (3950=80  7945=70)
+CPU_WARN=70
+
+#Hash rate to cause a rapid reboot
+HASH_LOW_5M=8000
+
+#Hash rate to reboot after 30 minutes   (3950=12000  7945=10000)
+HASH_LOW_30M=10000
+
+#LED Brightness (0 - 255)
+LED_BRT=50
+#======================================================
+
+#Local port and password to share XMRIG Hash Rate
+XMRIG_HTTP_PORT="8086"
+XMRIG_HTTP_TOKEN="xmrig56GW2218a"
+
+#Local port and password to share Hash, Temperature, and Watts
+STATUS_PORT="8080"
+STATUS_TOKEN="jjasfSGB123"
+
+# Pools (space-separated string, not an array)
+DIAG_POOLS=""
+
+# Wallet
+XMRIG_WALLET=""
+
+# Final xmrig command (single line — shell will expand variables)
+XMRIG_CMD="/root/xmrig/build/xmrig \
+  --url 192.168.1.30:3333 --user x --pass x \
+  --rig-id $(hostname) \
+  --donate-level 1 \
+  --http-host 127.0.0.1 \
+  --http-port ${XMRIG_HTTP_PORT} \
+  --http-access-token ${XMRIG_HTTP_TOKEN} \
+  --http-no-restricted \
+  --randomx-1gb-pages"
+
+
+#Keep all the --http options so the watchdog can read performance data.
+#Keep the entire command on one line to avoid windows notepad end of line problems on Linux.
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+Command:   sudo chmod 644 /etc/miner.env
+
+
+
+
+
+
+
+
+
+
+
+Use this file on the xmrig-proxy machine
+
+
+Command:  sudo nano /etc/proxy.env
+#########################################################
+# Your email where to send reports to
+EMAIL_TO="Your_Email_In_Quotes"
+
+#=== WATCHDOG THRESHOLDS (used by miner-watchdog.sh) ==
+#Low temperature in C to show that the CPU is idle and not mining
+CPU_LOW=0
+
+#Temperature to restart the miner and send an email   (3950=90  7945=80)
+CPU_HIGH=45
+
+#Temperature to change the LED to red   (3950=80  7945=70)
+CPU_WARN=40
+
+#Hash rate to cause a rapid reboot
+HASH_LOW_5M=8000
+
+#Hash rate to reboot after 30 minutes   (3950=12000  7945=10000)
+HASH_LOW_30M=10000
+
+#The total number of expected miners.   Any less will cause an email after 30 minutes (max 1 per day).
+MINERS_TOT=8
+
+#List of all attached miners with the LAN ip in order of the miner number
+#Use only space to separate them.   Do not include any port numbers.   
+MINERS_IPS="192.168.1.31  192.168.1.32  192.168.1.33  192.168.1.34  192.168.1.35  192.168.1.36  192.168.1.37  192.168.1.38"
+
+#LED Brightness (0 - 255)
+LED_BRT=50
+#======================================================
+
+# Motherboard Name is used when dmidecode won't return a valid name
+MOTHERBOARD_NAME="KAMRUI Pinova P2"
+
+# Local port and password to share XMRIG-PROXY hash rate and number of workers
+PROXY_HTTP_PORT="8086"
+PROXY_HTTP_TOKEN="xmrig56GW2218a"
+
+# Local status service
+STATUS_PORT="8080"
+STATUS_TOKEN="jjasfSGB123"
+
+# Pools (informational only)
+DIAG_POOLS="pool.hashvault.pro:443 gulf.moneroocean.stream:443 supportxmr.com:443"
+
+# Wallet used upstream by the proxy
+XMRIG_WALLET="YOUR_MONERO_ADDRESS_IN_QUOTES"
+
+# Proxy listening port (miners connect here)
+PROXY_PORT="3333"
+
+# Proxy log files
+ACCESS_LOG="/var/log/xmrig-proxy-access.log"
+ERROR_LOG="/var/log/xmrig-proxy.log"
+
+# Final xmrig-proxy command
+XMRIG_PROXY_CMD="/root/xmrig-proxy/build/xmrig-proxy \
+ --bind=0.0.0.0:${PROXY_PORT} \
+ --mode=simple \
+ \
+ --url=pool.hashvault.pro:443 \
+ --user=${XMRIG_WALLET} \
+ --pass=x \
+ --donate-level=1 \
+ --tls \
+ --tls-fingerprint=420c7850e09b7c0bdcf748a7da9eb3647daf8515718f36d9ccfdd6b9ff834b14 \
+ \
+ --url=gulf.moneroocean.stream:443 \
+ --user=${XMRIG_WALLET} \
+ --pass=x \
+ --tls \
+ \
+ --url=supportxmr.com:443 \
+ --user=${XMRIG_WALLET} \
+ --pass=x \
+ --tls \
+ \
+ --access-log-file=${ACCESS_LOG} \
+ --log-file=${ERROR_LOG} \
+ --verbose \
+ \
+ --http-host=127.0.0.1 \
+ --http-port=${PROXY_HTTP_PORT} \
+ --http-access-token=${PROXY_HTTP_TOKEN} \
+ --http-no-restricted"
+
+
+#Keep all the --http options so the watchdog can read performance data.
+#Keep the entire command on one line to avoid windows notepad end of line problems on Linux.
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+Command:   sudo chmod 644 /etc/proxy.env
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Command:   sudo nano /etc/msmtprc
+#########################################################
+# Global
+defaults
+syslog on
+
+# email account (no TLS on port 1025)
+account        Your_Name_To_Call_This_Email
+host           Your_email_URL
+port           1025
+auth           login
+tls            off
+tls_starttls   off
+from           Your_Return_Email
+user           Your_Username_Or_Email
+password       Your_App_Password
+
+account default : Your_Name_To_Call_This_Email
+#########################################################
+Ctrl-O, Enter, Ctrl-X
+
+
+
+
+
+
+
+
+
+
+
