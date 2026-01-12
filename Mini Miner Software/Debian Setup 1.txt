@@ -14,9 +14,14 @@ See the command that started XMRIG:   cat /proc/$(pidof xmrig)/cmdline | tr '\0'
    Then press Ctrl-C
 
 
+Key commands to switch between TTY screens (FOR MINERS WITH A DISPLAY)
+   Ctrl + Alt + F1 → tty1 (normal login console)
+   Ctrl + Alt + F2 → tty2 (XMRig display)
+
 
 
 If you are getting a DNS error in XMRIG, check that your internet isn't blocking the mining pool by redirecting your connection.
+    Parental controls on the home network can block mining pools.
 
 
 
@@ -528,15 +533,13 @@ Command:  sudo reboot   #(you can reboot later)
 
 
 
-
-
-
-
-******************** SHOW XMRIG LOG ON SCREEN AT BOOT ********************
+******************** SHOW XMRIG OUTPUT SCREEN AT BOOT ********************
 
 FOR MINERS WITH DISPLAY ONLY
 FOR MINERS WITH DISPLAY ONLY
 FOR MINERS WITH DISPLAY ONLY
+
+Note:  XMRig will display on TTY2
 
 Command:   sudo apt update && sudo apt upgrade -y
 Command:   sudo apt install -y xmrig ccze
@@ -545,10 +548,15 @@ Command:   sudo apt install -y xmrig ccze
 Command:   sudo nano /usr/local/bin/xmrig-display.sh
 #########################################################
 #!/bin/bash
+
+# Hard-bind this process to tty2 to prevent console races
+exec </dev/tty2 >/dev/tty2 2>&1
+
 clear
-echo -e "\e[1;33m=== XMRig Live Log ===\e[0m"
-echo -e "\e[2;37mCtrl-Alt-F2 for login • Ctrl-C for root shell\e[0m"
-sleep 2
+echo -e "\e[1;33m=== XMRig Live Log (tty2) ===\e[0m"
+echo -e "\e[2;37mCtrl-Alt-F1: login • tty2 auto-shown on boot\e[0m"
+sleep 1
+
 exec journalctl -u xmrig -f -o cat --no-pager | ccze -A
 #########################################################
 Ctrl-O, Enter, Ctrl-X
@@ -562,35 +570,76 @@ Command:   sudo chmod +x /usr/local/bin/xmrig-display.sh
 Command:   sudo nano /etc/systemd/system/xmrig-display.service
 #########################################################
 [Unit]
-Description=Rainbow XMRig log on console
-After=network.target xmrig.service
+Description=Rainbow XMRig log on console (tty2)
+
+# Start only after xmrig is running
+After=xmrig.service
+Wants=xmrig.service
+
+# Take ownership of tty2 cleanly
+Conflicts=getty@tty2.service
+After=getty@tty2.service
 
 [Service]
 Type=simple
+
+# Switch to tty2 before starting
+ExecStartPre=/usr/bin/chvt 2
+
+# Run your display script
 ExecStart=/usr/local/bin/xmrig-display.sh
+
+# Explicitly bind to tty2
+TTYPath=/dev/tty2
 StandardInput=tty
 StandardOutput=tty
-TTYPath=/dev/tty1
+
+# Reset terminal state cleanly
 TTYReset=yes
 TTYVHangup=yes
-KillMode=none
+
+# Restart if something crashes
+Restart=always
+RestartSec=2
+
+# Prevent rapid restart loops
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target
 #########################################################
 Ctrl-O, Enter, Ctrl-X
 
+MUST RUN THIS EVERY TIME:   sudo systemctl daemon-reload
 
-
-
-Command:   sudo systemctl mask getty@tty1
-
-Command:   sudo systemctl daemon-reload
 Command:   sudo systemctl enable xmrig-display.service
 Command:   sudo systemctl set-default multi-user.target
 
 Command:   sudo reboot
 
+
+
+
+
+******************** MATCH THE SCREEN RESOLUTION ********************
+
+Monitor is:   7 inch Portable Monitor Touchscreen IPS 1080P 1920 x 1080 60Hz Mini LCD Display Model R070F02T   Amazon $70
+
+Command:   sudo nano /etc/default/grub
+
+Find the line:   GRUB_CMDLINE_LINUX_DEFAULT="quiet"
+
+Change it to exactly:   GRUB_CMDLINE_LINUX_DEFAULT="quiet video=1920x1080@60"
+
+Ctrl-O, Enter, Ctrl-X
+
+
+MUST RUN THIS EVERY TIME:   sudo update-grub
+
+Command:   sudo reboot
 
 
 
@@ -606,7 +655,7 @@ FOR MINERS WITH DISPLAY ONLY
 
 Command:   sudo nano /etc/default/console-setup
 
-Change:    FONTFACE="TerminusBold"
+Change:    FONTFACE="Fixed"
            FONTSIZE="16x32"
 
 Ctrl-O  Enter  Ctrl-X

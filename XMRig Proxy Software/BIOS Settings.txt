@@ -1,0 +1,21 @@
+
+This is for the: KAMRUI Pinova P2 Mini PC.   
+
+The USB-C lapdock connection doesn't seem to be able to show the bios screen.
+You might have to use the HDMI cable to the lapdock and a separate usb keyboard to edit the BIOS.
+
+
+
+********************  BIOS SETTINGS  ********************
+
+
+Advanced / Power Management Configuration:
+	Restore AC Power Loss:  Power On
+
+
+Security / Secure Boot:
+	Secure Boot:   Disabled
+
+
+
+

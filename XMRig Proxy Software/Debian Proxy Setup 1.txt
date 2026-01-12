@@ -11,6 +11,10 @@ Proxy Log 200:   sudo tail -n 200 /var/log/xmrig-proxy.log
 Access Log View:    sudo tail -f /var/log/xmrig-proxy-access.log
 
 
+Key commands to switch between TTY screens (FOR MINERS WITH A DISPLAY)
+   Ctrl + Alt + F1 → tty1 (normal login console)
+   Ctrl + Alt + F2 → tty2 (XMRig display)
+
 
 
 
@@ -274,9 +278,15 @@ Command:   sudo reboot
 
 
 
+
+
+(REMOVE)  DID NOT USE
+(REMOVE)  DID NOT USE
+(REMOVE)  DID NOT USE
+
 ********************  KEEP DISPLAY ON   ********************
 
-The KAMRUI Pinova P2 uses Intel integrated graphics.
+The KAMRUI Pinova P2 uses AMD integrated graphics.
 No special configuration is required to keep the display active.
 
 If you want to prevent the screen from blanking on the local console:
@@ -296,6 +306,12 @@ Then reboot:
 Command:   sudo reboot
 
 This disables automatic console blanking so the display stays on.
+
+
+
+(REMOVE)  DID NOT USE
+(REMOVE)  DID NOT USE
+(REMOVE)  DID NOT USE
 
 
 
@@ -459,7 +475,7 @@ Test the email:   bash -c "source /usr/local/bin/send_email.sh; send_email 'Test
 
 
 
-********************  INSTALL XMRIG   ********************
+********************  INSTALL XMRIG-PROXY   ********************
 
 Command:   sudo apt update && sudo apt upgrade -y
 Command:   sudo apt install -y git build-essential cmake automake libtool autoconf
@@ -523,65 +539,96 @@ Command:   sudo systemctl enable --now xmrig-proxy.service
 
 
 
-******************** SHOW XMRIG LOG ON SCREEN AT BOOT ********************
+******************** SHOW XMRIG-PROXY OUTPUT SCREEN AT BOOT ********************
 
 FOR MINERS WITH DISPLAY ONLY
 FOR MINERS WITH DISPLAY ONLY
 FOR MINERS WITH DISPLAY ONLY
 
 Command:   sudo apt update && sudo apt upgrade -y
-Command:   sudo apt install -y xmrig ccze
+Command:   sudo apt install -y ccze
 
 
-Command:   sudo nano /usr/local/bin/xmrig-display.sh
+Command:   sudo nano /usr/local/bin/xmrig-proxy-display.sh
 #########################################################
 #!/bin/bash
+
+# Hard-bind this process to tty2 to prevent console races
+exec </dev/tty2 >/dev/tty2 2>&1
+
 clear
-echo -e "\e[1;33m=== XMRig Live Log ===\e[0m"
-echo -e "\e[2;37mCtrl-Alt-F2 for login • Ctrl-C for root shell\e[0m"
-sleep 2
-exec journalctl -u xmrig -f -o cat --no-pager | ccze -A
+echo -e "\e[1;33m=== XMRig-Proxy Live Log (tty2) ===\e[0m"
+echo -e "\e[2;37mCtrl-Alt-F1: login • tty2 auto-shown on boot\e[0m"
+sleep 1
+
+exec journalctl -u xmrig-proxy -f -o cat --no-pager | ccze -A
 #########################################################
 Ctrl-O, Enter, Ctrl-X
 
 
 
-Command:   sudo chmod +x /usr/local/bin/xmrig-display.sh
+Command:   sudo chmod +x /usr/local/bin/xmrig-proxy-display.sh
        
 
 
-Command:   sudo nano /etc/systemd/system/xmrig-display.service
+Command:   sudo nano /etc/systemd/system/xmrig-proxy-display.service
 #########################################################
 [Unit]
-Description=Rainbow XMRig log on console
-After=network.target xmrig.service
+Description=Rainbow XMRig-Proxy log on console (tty2)
+After=xmrig-proxy.service getty@tty2.service
+Wants=xmrig-proxy.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/xmrig-display.sh
+ExecStartPre=/usr/bin/chvt 2
+ExecStart=/usr/local/bin/xmrig-proxy-display.sh
+TTYPath=/dev/tty2
 StandardInput=tty
 StandardOutput=tty
-TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
-KillMode=none
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=3
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target
 #########################################################
 Ctrl-O, Enter, Ctrl-X
 
+(remove) undo on other miners    Command:   sudo systemctl mask getty@tty2.service
 
-
-
-Command:   sudo systemctl mask getty@tty1
 
 Command:   sudo systemctl daemon-reload
-Command:   sudo systemctl enable xmrig-display.service
+Command:   sudo systemctl enable xmrig-proxy-display.service
 Command:   sudo systemctl set-default multi-user.target
 
 Command:   sudo reboot
 
+
+
+
+
+
+******************** MATCH THE SCREEN RESOLUTION ********************
+
+Monitor is:   7 inch Portable Monitor Touchscreen IPS 1080P 1920 x 1080 60Hz Mini LCD Display Model R070F02T   Amazon $70
+
+THE SYSTEM RESOLUTION SETTING MUST MATCH THE MONITOR EXACTLY TO DISPLAY XMRIG
+
+Command:   sudo nano /etc/default/grub
+
+Find the line:   GRUB_CMDLINE_LINUX_DEFAULT="quiet"
+
+Change it to exactly:   GRUB_CMDLINE_LINUX_DEFAULT="quiet video=1920x1080@60"
+
+Ctrl-O, Enter, Ctrl-X
+
+
+Command:   sudo update-grub
+Command:   sudo reboot
 
 
 
@@ -597,7 +644,7 @@ FOR MINERS WITH DISPLAY ONLY
 
 Command:   sudo nano /etc/default/console-setup
 
-Change:    FONTFACE="TerminusBold"
+Change:    FONTFACE="Fixed"
            FONTSIZE="16x32"
 
 Ctrl-O  Enter  Ctrl-X
@@ -606,6 +653,7 @@ Command:   sudo setupcon
 Command:   sudo update-initramfs -u
 
 Command:   sudo reboot
+
 
 
 
