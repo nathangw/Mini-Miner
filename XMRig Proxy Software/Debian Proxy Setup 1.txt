@@ -545,6 +545,8 @@ FOR MINERS WITH DISPLAY ONLY
 FOR MINERS WITH DISPLAY ONLY
 FOR MINERS WITH DISPLAY ONLY
 
+Note:  XMRig-Proxy will display on TTY2
+
 Command:   sudo apt update && sudo apt upgrade -y
 Command:   sudo apt install -y ccze
 
@@ -575,22 +577,41 @@ Command:   sudo nano /etc/systemd/system/xmrig-proxy-display.service
 #########################################################
 [Unit]
 Description=Rainbow XMRig-Proxy log on console (tty2)
-After=xmrig-proxy.service getty@tty2.service
+
+# Start only after xmrig-proxy is running
+After=xmrig-proxy.service
 Wants=xmrig-proxy.service
+
+# Take ownership of tty2 cleanly
+Conflicts=getty@tty2.service
+After=getty@tty2.service
 
 [Service]
 Type=simple
+
+# Switch to tty2 before starting
 ExecStartPre=/usr/bin/chvt 2
+
+# Run your display script
 ExecStart=/usr/local/bin/xmrig-proxy-display.sh
+
+# Explicitly bind to tty2
 TTYPath=/dev/tty2
 StandardInput=tty
 StandardOutput=tty
+
+# Reset terminal state cleanly
 TTYReset=yes
 TTYVHangup=yes
-Restart=on-failure
-RestartSec=10
-StartLimitIntervalSec=60
+
+# Restart if something crashes
+Restart=always
+RestartSec=2
+
+# Prevent rapid restart loops
+StartLimitIntervalSec=300
 StartLimitBurst=3
+
 KillMode=control-group
 
 [Install]
@@ -598,10 +619,9 @@ WantedBy=multi-user.target
 #########################################################
 Ctrl-O, Enter, Ctrl-X
 
-(remove) undo on other miners    Command:   sudo systemctl mask getty@tty2.service
+MUST RUN THIS EVERY TIME:   sudo systemctl daemon-reload
 
 
-Command:   sudo systemctl daemon-reload
 Command:   sudo systemctl enable xmrig-proxy-display.service
 Command:   sudo systemctl set-default multi-user.target
 
@@ -627,7 +647,8 @@ Change it to exactly:   GRUB_CMDLINE_LINUX_DEFAULT="quiet video=1920x1080@60"
 Ctrl-O, Enter, Ctrl-X
 
 
-Command:   sudo update-grub
+MUST RUN THIS EVERY TIME:   sudo update-grub
+
 Command:   sudo reboot
 
 
