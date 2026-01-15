@@ -388,16 +388,26 @@ send_email() {
     echo "[$ts] No connection yet — retrying in 5 seconds..."
     sleep 5
   done
-  printf "[$ts] Sending email..."
 
   # Send email via msmtp (HTML with readable monospace formatting)
   if command -v msmtp >/dev/null 2>&1; then
 
     # Escape HTML-sensitive characters
+    local esc_body
     esc_body="$(printf "%b" "$body" \
       | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
 
-    cat <<EOF | msmtp -t
+    # === Retry msmtp up to 3 times with backoff ===
+    local tries=0
+    local max_tries=3
+    local wait_s=10
+
+    while (( tries < max_tries )); do
+      tries=$((tries + 1))
+      printf "[$ts] Sending email (try %d/%d)... " "$tries" "$max_tries"
+
+      if {
+        cat <<EOF
 To: $EMAIL_TO
 From: $EMAIL_TO
 Subject: $subject
@@ -420,10 +430,24 @@ $esc_body
   </body>
 </html>
 EOF
+      } | msmtp -t; then
+        echo "OK"
+        echo "Email sent: $subject"
+        return 0
+      else
+        echo "FAIL"
+        echo "msmtp failed — retrying in ${wait_s}s..."
+        sleep "$wait_s"
+        wait_s=$((wait_s * 2))   # 10s -> 20s -> 40s
+      fi
+    done
 
-    echo "Email sent: $subject"
+    echo "ERROR: Email failed after ${max_tries} attempts: $subject"
+    return 1
+
   else
     echo "NOTICE: msmtp not found; skipping email: $subject"
+    return 1
   fi
 }
 #########################################################

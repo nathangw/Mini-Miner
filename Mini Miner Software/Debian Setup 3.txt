@@ -95,6 +95,7 @@ Command:   sudo nano /usr/local/bin/miner-watchdog.sh
 # 2.0 - fixed email subject bug
 # 2.1 - added daily DNS internet check 
 # 2.2 - cleaned LED code, removed bc dependenacy, added dependency checks, internet check every hour
+# 2.3 - added 10 second delay before sending email
 
 set -Eeuo pipefail      		       # note the extra -E so ERR fires in functions/$(...)
 [ -f /etc/miner.env ] && . /etc/miner.env      # load shared configuration (STATUS_PORT, STATUS_TOKEN, XMRIG vars, etc.)
@@ -203,18 +204,19 @@ check_dependencies() {
 # --- Reboot email diagnostics (network/session snapshots) ---
 diag_block() {
   local label="$1"; shift
-  printf '\n\n========== %s ==========\n\n' "$label"   # two newlines: one after header, one blank line
-
   local output
   output=$("$@" 2>&1 || true)
-  if [ -n "$output" ]; then
-    echo "$output" | sed 's/^/   /'   # echo preserves newlines perfectly
-    printf '\n'                      # blank line after content
-  else
-    printf '   (no output)\n\n'
-  fi
 
-  printf '\n'   # ← This guarantees a blank line after every diag_block
+  {
+    printf '\n\n========== %s ==========\n\n' "$label"
+    if [ -n "$output" ]; then
+      echo "$output" | sed 's/^/   /'
+      printf '\n'
+    else
+      printf '   (no output)\n\n'
+    fi
+    printf '\n'
+  }
 }
 
 
@@ -608,6 +610,8 @@ send_status_email() {
   # Network/session diagnostics (snapshot)
   REBOOT_DIAGS="$(collect_reboot_diags 2>&1 || echo "(collect_reboot_diags failed)")"
 
+  sleep 10   # wait for network traffic to clear before sending email
+
   # SAFE: email failure is non-fatal
   send_email "$subject" "\
 Host: $HOSTNAME_STR
@@ -703,6 +707,7 @@ get_metrics() {
 do_reboot() {
   local reason="$1"
   log "REBOOT triggered: $reason"
+  internet_check
   send_status_email "$HOSTNAME_STR Miner Reboot $reason"
   set_led 0 0 0 || true  #turn off led
   sleep 10

@@ -91,6 +91,7 @@ Command:   sudo nano /usr/local/bin/proxy-watchdog.sh
 # 1.1 - led status is saved to a file
 # 1.2 - added 1 hour hash rate average.
 # 1.3 - neatened LED code, added dependency check.
+# 1.4 - added 10 second delay before sending email
 
 set -Eeuo pipefail      		       # note the extra -E so ERR fires in functions/$(...)
 
@@ -212,21 +213,39 @@ check_dependencies() {
 
 # --- Reboot email diagnostics (network/session snapshots) ---
 
+# diag_block() {
+#   local label="$1"; shift
+#   printf '\n\n========== %s ==========\n\n' "$label"   # two newlines: one after header, one blank line
+
+#   local output
+#   output=$("$@" 2>&1 || true)
+#   if [ -n "$output" ]; then
+#     echo "$output" | sed 's/^/   /'   # echo preserves newlines perfectly
+#     printf '\n'                      # blank line after content
+#   else
+#     printf '   (no output)\n\n'
+#   fi
+
+#   printf '\n'   # ← This guarantees a blank line after every diag_block
+# }
+
 diag_block() {
   local label="$1"; shift
-  printf '\n\n========== %s ==========\n\n' "$label"   # two newlines: one after header, one blank line
-
   local output
   output=$("$@" 2>&1 || true)
-  if [ -n "$output" ]; then
-    echo "$output" | sed 's/^/   /'   # echo preserves newlines perfectly
-    printf '\n'                      # blank line after content
-  else
-    printf '   (no output)\n\n'
-  fi
 
-  printf '\n'   # ← This guarantees a blank line after every diag_block
+  {
+    printf '\n\n========== %s ==========\n\n' "$label"
+    if [ -n "$output" ]; then
+      echo "$output" | sed 's/^/   /'
+      printf '\n'
+    else
+      printf '   (no output)\n\n'
+    fi
+    printf '\n'
+  }
 }
+
 
 
 # Simple, busybox-friendly traceroute formatter (updated)
@@ -449,14 +468,14 @@ collect_reboot_diags() {
 
   out+=$'\n\n========== ICMP ping reachability to each mining pool (5 packets) – checks basic IP-level reachability ==========\n\n'
   out+="Note: Many mining pools block or ignore pings – FAIL here is often normal and does NOT mean mining won't work.\n"
-  firstline=true
+  firstline=1
   for p in $DIAG_POOLS; do
     host="${p%%:*}"
     port="${p##*:}"
     out+="\n\nPool hostname: $host:$port"
     out+=$'\n'
-    if "$firstline"; then
-      firstline=false
+    if (( firstline )); then
+      firstline=0
       out+=$'\n'
     fi
     # getent may fail; don't let that kill the loop
@@ -558,6 +577,7 @@ collect_show_miners() {
   fi
 
   # Get ONLY last 3 minutes of log lines (xmrig-proxy.log format: [YYYY-MM-DD HH:MM:SS.mmm] ...)
+  local since_ts
   since_ts="$(date -d '3 minutes ago' '+%F %T')"
 
   log_lines="$(
@@ -667,6 +687,8 @@ send_status_email() {
 
   local REBOOT_DIAGS=""
   REBOOT_DIAGS="$(collect_reboot_diags 2>&1 || echo "(collect_REBOOT_DIAGS failed)")"
+
+  sleep 10   # wait for network traffic to clear before sending email
 
   send_email "$subject" "\
 Host: $HOSTNAME_STR
@@ -781,6 +803,7 @@ get_metrics() {
 do_reboot() {
   local REASON="$1"
   log "REBOOT triggered: $REASON"
+  internet_check
   send_status_email "$HOSTNAME_STR Proxy Reboot $REASON"
   set_led 0 0 0 || true  #turn off led
   sleep 10
@@ -938,7 +961,7 @@ while true; do
 
   # ================= Send 5 minute email =================
   if (( StartupEmailSent == 0 )); then  
-    if (( $(date +%s) - StartupEPOCH >= 300 )); then  
+    if (( $(date +%s) - StartupEPOCH >= 300 )); then 
       internet_check  
       send_status_email "$HOSTNAME_STR XMRig-Proxy Running (5 min)"
       StartupEmailSent=1
@@ -955,6 +978,7 @@ while true; do
 
   # ================= Send missing miners email once =================
   if (( LowMinersSec > 1800 && LowMinersSec <= 1860 )); then
+    internet_check
     send_status_email "$HOSTNAME_STR XMRig-Proxy $WK Miners Running"
     ((LowMinersSec += 120))
   fi
